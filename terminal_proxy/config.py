@@ -74,7 +74,7 @@ class Settings(BaseSettings):
         description="Maximum concurrent terminal pods. Evicts longest-idle when reached.",
     )
     pod_idle_timeout_seconds: int = Field(
-        default=300,
+        default=3600,
         description="Seconds of inactivity before terminating a terminal pod.",
     )
     pod_startup_timeout_seconds: int = Field(

@@ -14,7 +14,7 @@ def test_settings_defaults():
     assert settings.namespace == "default"
     assert settings.storage_mode == StorageMode.PER_USER
     assert settings.max_concurrent_pods == 100
-    assert settings.pod_idle_timeout_seconds == 300
+    assert settings.pod_idle_timeout_seconds == 3600
 
 
 def test_settings_from_env():
