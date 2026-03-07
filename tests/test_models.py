@@ -39,6 +39,7 @@ def test_terminal_pod_create():
     assert terminal.state == PodState.CREATING
     assert terminal.pod_name.startswith("terminal-")
     assert terminal.service_name.startswith("terminal-")
+    assert terminal.secret_name.startswith("terminal-secret-")
     assert terminal.pvc_name.startswith("pvc-")
     assert isinstance(terminal.created_at, datetime)
     assert isinstance(terminal.last_active_at, datetime)
@@ -50,6 +51,7 @@ def test_terminal_pod_endpoint():
         user_hash="abc123",
         pod_name="terminal-abc123",
         service_name="terminal-abc123",
+        secret_name="terminal-secret-abc123",
         pvc_name="pvc-abc123",
         api_key="key",
         state=PodState.RUNNING,
@@ -65,6 +67,7 @@ def test_terminal_pod_endpoint():
         user_hash="abc123",
         pod_name="terminal-abc123",
         service_name="terminal-abc123",
+        secret_name="terminal-secret-abc123",
         pvc_name="pvc-abc123",
         api_key="key",
         state=PodState.RUNNING,

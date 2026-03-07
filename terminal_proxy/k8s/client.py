@@ -6,7 +6,7 @@ import logging
 from typing import Any, cast
 
 from kubernetes import client, config
-from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1PodList
+from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1PodList, V1Secret
 from kubernetes.client.rest import ApiException
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -175,6 +175,45 @@ class K8sClient:
         """Delete a Service by name, ignoring 404 errors."""
         try:
             self.core_v1.delete_namespaced_service(service_name, self.namespace)
+        except ApiException as e:
+            if e.status != 404:
+                raise
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
+    def get_secret(self, secret_name: str) -> V1Secret | None:
+        """Get a secret by name, returning None if not found."""
+        try:
+            return self.core_v1.read_namespaced_secret(secret_name, self.namespace)
+        except ApiException as e:
+            if e.status == 404:
+                return None
+            raise
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
+    def create_secret(self, secret_manifest: dict[str, Any]) -> V1Secret:
+        """Create a secret from the given manifest."""
+        return self.core_v1.create_namespaced_secret(self.namespace, secret_manifest)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
+    def delete_secret(self, secret_name: str) -> None:
+        """Delete a secret by name, ignoring 404 errors."""
+        try:
+            self.core_v1.delete_namespaced_secret(secret_name, self.namespace)
         except ApiException as e:
             if e.status != 404:
                 raise

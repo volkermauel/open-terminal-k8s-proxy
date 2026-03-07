@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
@@ -11,6 +12,7 @@ from terminal_proxy.models import TerminalPod
 logger = logging.getLogger(__name__)
 
 SHARED_PVC_NAME = "terminal-shared-storage"
+API_KEY_SECRET_KEY = "api-key"
 
 
 def build_pvc_manifest(
@@ -46,6 +48,28 @@ def build_pvc_manifest(
     return manifest
 
 
+def build_secret_manifest(
+    secret_name: str,
+    api_key: str,
+    labels: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a Kubernetes Secret manifest for storing the API key."""
+    encoded_key = base64.b64encode(api_key.encode()).decode()
+    manifest: dict[str, Any] = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": secret_name,
+            "labels": labels or {},
+        },
+        "type": "Opaque",
+        "data": {
+            API_KEY_SECRET_KEY: encoded_key,
+        },
+    }
+    return manifest
+
+
 def build_pod_manifest(
     terminal_pod: TerminalPod,
     cfg: Settings,
@@ -54,6 +78,7 @@ def build_pod_manifest(
     shared_sub_path: str | None = None,
     node_name: str | None = None,
     node_selector: dict[str, Any] | None = None,
+    secret_name: str | None = None,
 ) -> dict[str, Any]:
     """Build a Kubernetes Pod manifest for a terminal instance."""
     labels = {
@@ -93,14 +118,26 @@ def build_pod_manifest(
             mount["subPath"] = shared_sub_path
         volume_mounts.append(mount)
 
+    env_var: dict[str, Any]
+    if secret_name:
+        env_var = {
+            "name": "OPEN_TERMINAL_API_KEY",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": secret_name,
+                    "key": API_KEY_SECRET_KEY,
+                }
+            },
+        }
+    else:
+        env_var = {"name": "OPEN_TERMINAL_API_KEY", "value": terminal_pod.api_key}
+
     container = {
         "name": "terminal",
         "image": cfg.terminal_image,
         "imagePullPolicy": cfg.terminal_image_pull_policy,
         "ports": [{"containerPort": cfg.terminal_service_port}],
-        "env": [
-            {"name": "OPEN_TERMINAL_API_KEY", "value": terminal_pod.api_key},
-        ],
+        "env": [env_var],
         "resources": {
             "requests": {
                 "cpu": cfg.terminal_cpu_request,
@@ -180,13 +217,19 @@ def build_pod_for_user(
     terminal_pod: TerminalPod,
     cfg: Settings,
     shared_pvc_node: str | None = None,
-) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
-    """Build pod, optional PVC, and service manifests based on storage mode."""
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any], dict[str, Any]]:
+    """Build pod, optional PVC, secret, and service manifests based on storage mode."""
     pvc_manifest = None
     pvc_name = None
     shared_pvc_name = None
     shared_sub_path = None
     node_name = None
+
+    labels = {
+        "app": cfg.labels_app,
+        "managed-by": cfg.labels_managed_by,
+        "user-id-hash": terminal_pod.user_hash,
+    }
 
     if cfg.storage_mode == StorageMode.PER_USER:
         if terminal_pod.pvc_name is None:
@@ -196,11 +239,7 @@ def build_pod_for_user(
             size=cfg.storage_per_user_size,
             storage_class_name=cfg.storage_class_name,
             access_mode="ReadWriteOnce",
-            labels={
-                "app": cfg.labels_app,
-                "managed-by": cfg.labels_managed_by,
-                "user-id-hash": terminal_pod.user_hash,
-            },
+            labels=labels,
         )
         pvc_name = terminal_pod.pvc_name
 
@@ -214,6 +253,12 @@ def build_pod_for_user(
         if shared_pvc_node:
             node_name = shared_pvc_node
 
+    secret_manifest = build_secret_manifest(
+        secret_name=terminal_pod.secret_name,
+        api_key=terminal_pod.api_key,
+        labels=labels,
+    )
+
     pod_manifest = build_pod_manifest(
         terminal_pod=terminal_pod,
         cfg=cfg,
@@ -221,8 +266,9 @@ def build_pod_for_user(
         shared_pvc_name=shared_pvc_name,
         shared_sub_path=shared_sub_path,
         node_name=node_name,
+        secret_name=terminal_pod.secret_name,
     )
 
     service_manifest = build_service_manifest(terminal_pod, cfg)
 
-    return pod_manifest, pvc_manifest, service_manifest
+    return pod_manifest, pvc_manifest, secret_manifest, service_manifest
