@@ -39,11 +39,9 @@ class WebSocketProxy:
         path: str,
     ) -> None:
         """Proxy a WebSocket connection to a terminal pod."""
-        await client_ws.accept()
-
         session = await self.get_session()
 
-        ws_url = f"ws://{terminal.pod_ip}:8000{path}"
+        ws_url = f"ws://{terminal.service_name}:8000{path}"
 
         try:
             async with session.ws_connect(

@@ -288,7 +288,7 @@ async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> 
     """Get current working directory."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/files/cwd"
+    target_url = f"{terminal.endpoint}/files/cwd"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
 
 
@@ -301,7 +301,7 @@ async def set_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> 
     """Set current working directory."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/files/cwd"
+    target_url = f"{terminal.endpoint}/files/cwd"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
 
 
@@ -318,7 +318,7 @@ async def proxy_files(
     """Proxy file operations to terminal pod."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/files/{path}"
+    target_url = f"{terminal.endpoint}/files/{path}"
     if request.query_params:
         target_url += f"?{request.query_params}"
 
@@ -336,7 +336,7 @@ async def proxy_execute(
     """Proxy command execution requests."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/execute"
+    target_url = f"{terminal.endpoint}/execute"
     if request.query_params:
         target_url += f"?{request.query_params}"
 
@@ -354,7 +354,7 @@ async def proxy_execute_process(
     """Proxy process-specific requests."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/execute/{process_id}/{path}"
+    target_url = f"{terminal.endpoint}/execute/{process_id}/{path}"
     if request.query_params:
         target_url += f"?{request.query_params}"
 
@@ -370,7 +370,7 @@ async def proxy_ports(
     """Proxy port listing requests."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/ports"
+    target_url = f"{terminal.endpoint}/ports"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
 
 
@@ -385,7 +385,7 @@ async def proxy_port_forward(
     """Proxy port forwarding requests."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/proxy/{port}/{path}"
+    target_url = f"{terminal.endpoint}/proxy/{port}/{path}"
     if request.query_params:
         target_url += f"?{request.query_params}"
 
@@ -401,7 +401,7 @@ async def proxy_terminals(
     """Proxy terminal session management."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/api/terminals"
+    target_url = f"{terminal.endpoint}/api/terminals"
     if request.query_params:
         target_url += f"?{request.query_params}"
 
@@ -418,7 +418,7 @@ async def proxy_terminal_session(
     """Proxy terminal session operations."""
     terminal = await get_terminal_for_user(user_id)
 
-    target_url = f"http://{terminal.pod_ip}:8000/api/terminals/{session_id}"
+    target_url = f"{terminal.endpoint}/api/terminals/{session_id}"
     if request.query_params:
         target_url += f"?{request.query_params}"
 

@@ -1,6 +1,6 @@
 """Tests for Kubernetes client wrapper."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from kubernetes.client.rest import ApiException
@@ -106,8 +106,16 @@ async def test_wait_for_pod_ready_success(k8s_client):
     mock_pod.status.phase = "Running"
     mock_pod.status.pod_ip = "10.0.0.1"
 
-    with patch.object(k8s_client, "get_pod", return_value=mock_pod):
-        ready, pod_ip = await k8s_client.wait_for_pod_ready("test-pod", timeout_seconds=5)
+    with (
+        patch.object(k8s_client, "get_pod", return_value=mock_pod),
+        patch("httpx.AsyncClient") as mock_client,
+    ):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__aenter__.return_value.get = AsyncMock(return_value=mock_response)
+        ready, pod_ip = await k8s_client.wait_for_pod_ready(
+            "test-pod", "test-service", timeout_seconds=5
+        )
 
     assert ready is True
     assert pod_ip == "10.0.0.1"
@@ -120,7 +128,9 @@ async def test_wait_for_pod_ready_timeout(k8s_client):
     mock_pod.status.pod_ip = None
 
     with patch.object(k8s_client, "get_pod", return_value=mock_pod):
-        ready, pod_ip = await k8s_client.wait_for_pod_ready("test-pod", timeout_seconds=1)
+        ready, pod_ip = await k8s_client.wait_for_pod_ready(
+            "test-pod", "test-service", timeout_seconds=1
+        )
 
     assert ready is False
     assert pod_ip is None
@@ -132,7 +142,9 @@ async def test_wait_for_pod_ready_failed(k8s_client):
     mock_pod.status.phase = "Failed"
 
     with patch.object(k8s_client, "get_pod", return_value=mock_pod):
-        ready, pod_ip = await k8s_client.wait_for_pod_ready("test-pod", timeout_seconds=5)
+        ready, pod_ip = await k8s_client.wait_for_pod_ready(
+            "test-pod", "test-service", timeout_seconds=5
+        )
 
     assert ready is False
     assert pod_ip is None

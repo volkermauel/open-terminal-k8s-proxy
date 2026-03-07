@@ -38,6 +38,7 @@ def test_terminal_pod_create():
     assert terminal.api_key == "api-key-456"
     assert terminal.state == PodState.CREATING
     assert terminal.pod_name.startswith("terminal-")
+    assert terminal.service_name.startswith("terminal-")
     assert terminal.pvc_name.startswith("pvc-")
     assert isinstance(terminal.created_at, datetime)
     assert isinstance(terminal.last_active_at, datetime)
@@ -48,6 +49,7 @@ def test_terminal_pod_endpoint():
         user_id="test",
         user_hash="abc123",
         pod_name="terminal-abc123",
+        service_name="terminal-abc123",
         pvc_name="pvc-abc123",
         api_key="key",
         state=PodState.RUNNING,
@@ -56,12 +58,13 @@ def test_terminal_pod_endpoint():
         pod_ip="10.0.0.1",
     )
 
-    assert terminal.endpoint == "http://10.0.0.1:8000"
+    assert terminal.endpoint == "http://terminal-abc123:8000"
 
     terminal_no_ip = TerminalPod(
         user_id="test",
         user_hash="abc123",
         pod_name="terminal-abc123",
+        service_name="terminal-abc123",
         pvc_name="pvc-abc123",
         api_key="key",
         state=PodState.RUNNING,
@@ -69,4 +72,4 @@ def test_terminal_pod_endpoint():
         last_active_at=datetime.utcnow(),
     )
 
-    assert "terminal-abc123" in terminal_no_ip.endpoint
+    assert terminal_no_ip.endpoint == "http://terminal-abc123:8000"

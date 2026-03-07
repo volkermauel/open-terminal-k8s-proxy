@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class StorageMode(StrEnum):
+class StorageMode(str, Enum):
     """Storage mode for persistent volumes."""
 
     PER_USER = "perUser"
@@ -44,7 +44,9 @@ class Settings(BaseSettings):
 
     terminal_cpu_request: str = Field(default="500m", description="CPU request for terminal pods.")
     terminal_cpu_limit: str = Field(default="1000m", description="CPU limit for terminal pods.")
-    terminal_memory_request: str = Field(default="512Mi", description="Memory request for terminal pods.")
+    terminal_memory_request: str = Field(
+        default="512Mi", description="Memory request for terminal pods."
+    )
     terminal_memory_limit: str = Field(default="4Gi", description="Memory limit for terminal pods.")
 
     terminal_service_port: int = Field(
@@ -60,8 +62,12 @@ class Settings(BaseSettings):
         default="",
         description="StorageClass for PVCs. Empty uses cluster default.",
     )
-    storage_per_user_size: str = Field(default="5Gi", description="PVC size per user (perUser mode).")
-    storage_shared_size: str = Field(default="100Gi", description="Shared PVC size (shared/sharedRWO mode).")
+    storage_per_user_size: str = Field(
+        default="5Gi", description="PVC size per user (perUser mode)."
+    )
+    storage_shared_size: str = Field(
+        default="100Gi", description="Shared PVC size (shared/sharedRWO mode)."
+    )
 
     max_concurrent_pods: int = Field(
         default=100,
@@ -80,10 +86,16 @@ class Settings(BaseSettings):
         description="Interval between idle pod cleanup scans.",
     )
 
-    labels_app: str = Field(default="open-terminal-user", description="App label for terminal pods.")
-    labels_managed_by: str = Field(default="terminal-proxy", description="Managed-by label for terminal pods.")
+    labels_app: str = Field(
+        default="open-terminal-user", description="App label for terminal pods."
+    )
+    labels_managed_by: str = Field(
+        default="terminal-proxy", description="Managed-by label for terminal pods."
+    )
 
-    cors_allowed_origins: str = Field(default="*", description="Comma-separated CORS allowed origins.")
+    cors_allowed_origins: str = Field(
+        default="*", description="Comma-separated CORS allowed origins."
+    )
 
     log_level: str = Field(default="INFO", description="Logging level.")
 
