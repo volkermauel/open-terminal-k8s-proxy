@@ -39,7 +39,7 @@ storage:
     size: 100Gi
 
 maxConcurrentPods: 100
-podIdleTimeoutSeconds: 300
+podIdleTimeoutSeconds: 3600
 podStartupTimeoutSeconds: 60
 podCleanupIntervalSeconds: 60
 
