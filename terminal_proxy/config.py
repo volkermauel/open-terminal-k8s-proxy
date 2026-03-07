@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class StorageMode(str, Enum):
+class StorageMode(StrEnum):
     PER_USER = "perUser"
     SHARED = "shared"
     SHARED_RWO = "sharedRWO"

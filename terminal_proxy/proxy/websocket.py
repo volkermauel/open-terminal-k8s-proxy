@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from typing import Optional
 
 import aiohttp
 from fastapi import WebSocket, WebSocketDisconnect
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class WebSocketProxy:
     def __init__(self):
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
 
     async def get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -85,10 +85,8 @@ class WebSocketProxy:
             logger.error(f"WebSocket proxy error: {e}")
             await client_ws.close(code=1011, reason="Internal error")
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await client_ws.close()
-            except Exception:
-                pass
 
 
 ws_proxy = WebSocketProxy()

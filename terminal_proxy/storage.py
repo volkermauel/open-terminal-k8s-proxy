@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from terminal_proxy.config import Settings, StorageMode, settings
 from terminal_proxy.k8s.client import k8s_client
@@ -15,9 +14,9 @@ logger = logging.getLogger(__name__)
 class StorageManager:
     def __init__(self, cfg: Settings):
         self.cfg = cfg
-        self._shared_pvc_node: Optional[str] = None
+        self._shared_pvc_node: str | None = None
 
-    def ensure_shared_pvc(self) -> Optional[str]:
+    def ensure_shared_pvc(self) -> str | None:
         if self.cfg.storage_mode == StorageMode.PER_USER:
             return None
 
@@ -48,7 +47,7 @@ class StorageManager:
             logger.error(f"Failed to create shared PVC: {e}")
             raise
 
-    def get_shared_pvc_node(self) -> Optional[str]:
+    def get_shared_pvc_node(self) -> str | None:
         if self.cfg.storage_mode != StorageMode.SHARED_RWO:
             return None
 

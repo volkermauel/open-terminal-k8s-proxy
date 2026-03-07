@@ -5,8 +5,8 @@ from datetime import datetime
 from terminal_proxy.models import (
     PodState,
     TerminalPod,
-    user_id_to_hash,
     sanitize_k8s_name,
+    user_id_to_hash,
 )
 
 
@@ -33,7 +33,7 @@ def test_sanitize_k8s_name():
 
 def test_terminal_pod_create():
     terminal = TerminalPod.create("user-123", "api-key-456")
-    
+
     assert terminal.user_id == "user-123"
     assert terminal.api_key == "api-key-456"
     assert terminal.state == PodState.CREATING
@@ -55,9 +55,9 @@ def test_terminal_pod_endpoint():
         last_active_at=datetime.utcnow(),
         pod_ip="10.0.0.1",
     )
-    
+
     assert terminal.endpoint == "http://10.0.0.1:8000"
-    
+
     terminal_no_ip = TerminalPod(
         user_id="test",
         user_hash="abc123",
@@ -68,5 +68,5 @@ def test_terminal_pod_endpoint():
         created_at=datetime.utcnow(),
         last_active_at=datetime.utcnow(),
     )
-    
+
     assert "terminal-abc123" in terminal_no_ip.endpoint

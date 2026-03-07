@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from terminal_proxy.config import Settings, StorageMode, settings
+from terminal_proxy.config import Settings, StorageMode
 from terminal_proxy.models import TerminalPod
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,7 @@ def build_pvc_manifest(
     size: str,
     storage_class_name: str,
     access_mode: str = "ReadWriteOnce",
-    labels: Optional[dict] = None,
+    labels: dict | None = None,
 ) -> dict:
     manifest = {
         "apiVersion": "v1",
@@ -46,11 +45,11 @@ def build_pvc_manifest(
 def build_pod_manifest(
     terminal_pod: TerminalPod,
     cfg: Settings,
-    pvc_name: Optional[str] = None,
-    shared_pvc_name: Optional[str] = None,
-    shared_sub_path: Optional[str] = None,
-    node_name: Optional[str] = None,
-    node_selector: Optional[dict] = None,
+    pvc_name: str | None = None,
+    shared_pvc_name: str | None = None,
+    shared_sub_path: str | None = None,
+    node_name: str | None = None,
+    node_selector: dict | None = None,
 ) -> dict:
     labels = {
         "app": cfg.labels_app,
@@ -131,8 +130,8 @@ def build_pod_manifest(
 def build_pod_for_user(
     terminal_pod: TerminalPod,
     cfg: Settings,
-    shared_pvc_node: Optional[str] = None,
-) -> tuple[dict, Optional[dict]]:
+    shared_pvc_node: str | None = None,
+) -> tuple[dict, dict | None]:
     pvc_manifest = None
     pvc_name = None
     shared_pvc_name = None

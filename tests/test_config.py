@@ -8,7 +8,7 @@ from terminal_proxy.config import Settings, StorageMode
 
 def test_settings_defaults():
     settings = Settings()
-    
+
     assert settings.proxy_host == "0.0.0.0"
     assert settings.proxy_port == 8000
     assert settings.namespace == "default"
@@ -27,7 +27,7 @@ def test_settings_from_env():
         },
     ):
         settings = Settings()
-        
+
         assert settings.proxy_port == 9000
         assert settings.max_concurrent_pods == 50
         assert settings.storage_mode == StorageMode.SHARED
@@ -35,9 +35,9 @@ def test_settings_from_env():
 
 def test_cors_origins_parsing():
     settings = Settings()
-    
+
     assert settings.cors_origins == ["*"]
-    
+
     with patch.dict(os.environ, {"CORS_ALLOWED_ORIGINS": "http://localhost,http://example.com"}):
         settings = Settings()
         assert settings.cors_origins == ["http://localhost", "http://example.com"]

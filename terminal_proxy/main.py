@@ -8,7 +8,6 @@ import secrets
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from terminal_proxy import __version__
 from terminal_proxy.config import settings
-from terminal_proxy.models import HealthStatus, PodState
+from terminal_proxy.models import PodState
 from terminal_proxy.pod_manager import pod_manager
 from terminal_proxy.proxy.http import http_proxy
 from terminal_proxy.proxy.websocket import ws_proxy
@@ -43,7 +42,7 @@ PROXY_API_KEY = get_or_create_proxy_api_key()
 
 
 async def verify_api_key(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> str:
     if not PROXY_API_KEY:
         return "anonymous"
@@ -94,19 +93,19 @@ app = FastAPI(
 async def rate_limit_middleware(request: Request, call_next):
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
-    
+
     request_counts[client_ip] = [
         ts for ts in request_counts[client_ip] if now - ts < 60
     ]
-    
+
     if len(request_counts[client_ip]) >= REQUESTS_PER_MINUTE:
         return JSONResponse(
             status_code=429,
             content={"error": "Rate limit exceeded", "detail": "Too many requests"},
         )
-    
+
     request_counts[client_ip].append(now)
-    
+
     return await call_next(request)
 
 
@@ -119,7 +118,7 @@ async def request_size_limit_middleware(request: Request, call_next):
                 status_code=413,
                 content={"error": "Payload too large", "detail": f"Maximum size is {REQUEST_BODY_MAX_SIZE} bytes"},
             )
-    
+
     return await call_next(request)
 
 app.add_middleware(
@@ -134,23 +133,23 @@ app.add_middleware(
 @app.get("/health", include_in_schema=False)
 async def health():
     from terminal_proxy.k8s.client import k8s_client
-    
+
     if not k8s_client._initialized:
         return {"status": "ok", "k8s": "not_initialized"}
-    
+
     k8s_healthy = False
     try:
         k8s_client.core_v1.read_namespace(k8s_client.namespace)
         k8s_healthy = True
     except Exception as e:
         logger.warning(f"K8s health check failed: {e}")
-    
+
     if not k8s_healthy:
         return JSONResponse(
             status_code=503,
             content={"status": "unhealthy", "k8s": "disconnected"},
         )
-    
+
     return {"status": "ok", "k8s": "connected"}
 
 
@@ -360,7 +359,7 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str):
             if payload.get("type") != "auth" or payload.get("token") != PROXY_API_KEY:
                 await client_ws.close(code=4001, reason="Invalid API key")
                 return
-        except (asyncio.TimeoutError, json.JSONDecodeError, Exception):
+        except (TimeoutError, json.JSONDecodeError, Exception):
             await client_ws.close(code=4001, reason="Auth timeout or invalid payload")
             return
 

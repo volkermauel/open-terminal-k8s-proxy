@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import httpx
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
 from terminal_proxy.circuit_breaker import circuit_breaker_registry
-from terminal_proxy.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +26,7 @@ STREAMING_CONTENT_TYPES = ("application/octet-stream", "image/", "application/pd
 
 class HttpProxy:
     def __init__(self):
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -48,7 +46,7 @@ class HttpProxy:
         target_url: str,
         request: Request,
         terminal_api_key: str,
-        pod_key: Optional[str] = None,
+        pod_key: str | None = None,
     ) -> Response:
         if pod_key:
             circuit_breaker = circuit_breaker_registry.get(pod_key)
@@ -58,7 +56,7 @@ class HttpProxy:
                     status_code=503,
                     media_type="application/json",
                 )
-        
+
         client = await self.get_client()
 
         headers = {
@@ -77,12 +75,12 @@ class HttpProxy:
                 content=body or None,
                 params=dict(request.query_params),
             )
-            
+
             if pod_key:
                 circuit_breaker = circuit_breaker_registry.get(pod_key)
                 await circuit_breaker.record_success()
-                
-        except httpx.ConnectError as e:
+
+        except httpx.ConnectError:
             if pod_key:
                 circuit_breaker = circuit_breaker_registry.get(pod_key)
                 await circuit_breaker.record_failure()
@@ -91,7 +89,7 @@ class HttpProxy:
                 status_code=503,
                 media_type="application/json",
             )
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             if pod_key:
                 circuit_breaker = circuit_breaker_registry.get(pod_key)
                 await circuit_breaker.record_failure()

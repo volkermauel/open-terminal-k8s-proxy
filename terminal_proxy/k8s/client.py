@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from kubernetes import client, config
-from kubernetes.client import V1Pod, V1PersistentVolumeClaim, V1PodList
+from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1PodList
 from kubernetes.client.rest import ApiException
-from kubernetes.watch import Watch
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from terminal_proxy.config import settings
 
@@ -26,9 +24,9 @@ def is_retryable_exception(exception: Exception) -> bool:
 
 
 class K8sClient:
-    def __init__(self, namespace: Optional[str] = None):
+    def __init__(self, namespace: str | None = None):
         self.namespace = namespace or settings.namespace
-        self._core_v1: Optional[client.CoreV1Api] = None
+        self._core_v1: client.CoreV1Api | None = None
         self._initialized = False
 
     def init(self) -> None:
@@ -42,8 +40,8 @@ class K8sClient:
             try:
                 config.load_kube_config()
                 logger.info("Loaded kubeconfig from environment")
-            except config.ConfigException:
-                raise RuntimeError("Could not load Kubernetes configuration")
+            except config.ConfigException as e:
+                raise RuntimeError("Could not load Kubernetes configuration") from e
 
         self._core_v1 = client.CoreV1Api()
         self._initialized = True
@@ -61,7 +59,7 @@ class K8sClient:
         retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
         reraise=True,
     )
-    def get_pod(self, pod_name: str) -> Optional[V1Pod]:
+    def get_pod(self, pod_name: str) -> V1Pod | None:
         try:
             return self.core_v1.read_namespaced_pod(pod_name, self.namespace)
         except ApiException as e:
@@ -113,7 +111,7 @@ class K8sClient:
         retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
         reraise=True,
     )
-    def get_pvc(self, pvc_name: str) -> Optional[V1PersistentVolumeClaim]:
+    def get_pvc(self, pvc_name: str) -> V1PersistentVolumeClaim | None:
         try:
             return self.core_v1.read_namespaced_persistent_volume_claim(pvc_name, self.namespace)
         except ApiException as e:
@@ -143,7 +141,7 @@ class K8sClient:
             if e.status != 404:
                 raise
 
-    async def wait_for_pod_ready(self, pod_name: str, timeout_seconds: int = 60) -> tuple[bool, Optional[str]]:
+    async def wait_for_pod_ready(self, pod_name: str, timeout_seconds: int = 60) -> tuple[bool, str | None]:
         import asyncio
 
         start_time = asyncio.get_event_loop().time()
@@ -163,7 +161,7 @@ class K8sClient:
 
         return False, None
 
-    def get_shared_pvc_node(self, pvc_name: str) -> Optional[str]:
+    def get_shared_pvc_node(self, pvc_name: str) -> str | None:
         pods = self.list_terminal_pods()
         for pod in pods.items:
             for volume in pod.spec.volumes or []:

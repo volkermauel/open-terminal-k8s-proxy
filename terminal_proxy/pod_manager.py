@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import secrets
 from datetime import datetime
-from typing import Optional
 
 from terminal_proxy.config import Settings, StorageMode, settings
 from terminal_proxy.k8s.client import k8s_client
@@ -22,8 +22,8 @@ class PodManager:
         self.cfg = cfg
         self._pods: dict[str, TerminalPod] = {}
         self._lock = asyncio.Lock()
-        self._cleanup_task: Optional[asyncio.Task] = None
-        self._health_check_task: Optional[asyncio.Task] = None
+        self._cleanup_task: asyncio.Task | None = None
+        self._health_check_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         await self._reconcile_existing_pods()
@@ -34,16 +34,12 @@ class PodManager:
     async def stop(self) -> None:
         if self._cleanup_task:
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
         if self._health_check_task:
             self._health_check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._health_check_task
-            except asyncio.CancelledError:
-                pass
         logger.info("Pod manager stopped")
 
     async def _reconcile_existing_pods(self) -> None:
@@ -204,11 +200,11 @@ class PodManager:
 
     async def _check_pod_health(self) -> None:
         to_remove = []
-        
+
         for user_hash, terminal in self._pods.items():
             if terminal.state != PodState.RUNNING:
                 continue
-            
+
             try:
                 pod = k8s_client.get_pod(terminal.pod_name)
                 if pod is None or pod.status.phase in ("Failed", "Unknown"):
@@ -219,7 +215,7 @@ class PodManager:
                     logger.info(f"Updated pod {terminal.pod_name} IP to {terminal.pod_ip}")
             except Exception as e:
                 logger.warning(f"Failed to check health of pod {terminal.pod_name}: {e}")
-        
+
         for user_hash in to_remove:
             terminal = self._pods.get(user_hash)
             if terminal:

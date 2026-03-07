@@ -6,10 +6,10 @@ import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 def user_id_to_hash(user_id: str) -> str:
@@ -26,7 +26,7 @@ def sanitize_k8s_name(name: str) -> str:
     return name[:63].rstrip("-") or "unknown"
 
 
-class PodState(str, Enum):
+class PodState(StrEnum):
     CREATING = "creating"
     RUNNING = "running"
     FAILED = "failed"
@@ -38,12 +38,12 @@ class TerminalPod:
     user_id: str
     user_hash: str
     pod_name: str
-    pvc_name: Optional[str]
+    pvc_name: str | None
     api_key: str
     state: PodState
     created_at: datetime
     last_active_at: datetime
-    pod_ip: Optional[str] = None
+    pod_ip: str | None = None
 
     @property
     def endpoint(self) -> str:
@@ -52,7 +52,7 @@ class TerminalPod:
         return f"http://{self.pod_name}.{self.pod_name}:8000"
 
     @classmethod
-    def create(cls, user_id: str, api_key: str) -> "TerminalPod":
+    def create(cls, user_id: str, api_key: str) -> TerminalPod:
         user_hash = user_id_to_hash(user_id)
         now = datetime.utcnow()
         return cls(
@@ -73,7 +73,7 @@ class StorageInfo:
     storage_class: str
     size: str
     access_mode: str
-    sub_path: Optional[str] = None
+    sub_path: str | None = None
 
 
 class HealthStatus(BaseModel):
@@ -89,4 +89,4 @@ class TerminalListResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: str
-    detail: Optional[str] = None
+    detail: str | None = None
