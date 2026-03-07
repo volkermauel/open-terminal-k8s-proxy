@@ -155,7 +155,9 @@ class K8sClient:
             if e.status != 404:
                 raise
 
-    async def wait_for_pod_ready(self, pod_name: str, timeout_seconds: int = 60) -> tuple[bool, str | None]:
+    async def wait_for_pod_ready(
+        self, pod_name: str, timeout_seconds: int = 60
+    ) -> tuple[bool, str | None]:
         """Wait for a pod to become ready, returning (success, pod_ip)."""
         import asyncio
 
@@ -181,7 +183,10 @@ class K8sClient:
         pods = self.list_terminal_pods()
         for pod in pods.items:
             for volume in pod.spec.volumes or []:
-                if volume.persistent_volume_claim and volume.persistent_volume_claim.claim_name == pvc_name:
+                if (
+                    volume.persistent_volume_claim
+                    and volume.persistent_volume_claim.claim_name == pvc_name
+                ):
                     return cast(str | None, pod.spec.node_name)
         return None
 
