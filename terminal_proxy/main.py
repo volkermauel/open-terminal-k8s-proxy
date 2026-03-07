@@ -7,8 +7,9 @@ import logging
 import secrets
 import time
 from collections import defaultdict
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -131,7 +132,7 @@ app.add_middleware(
 )
 
 
-@app.get("/health", include_in_schema=False)
+@app.get("/health", include_in_schema=False, response_model=None)
 async def health() -> dict[str, str] | JSONResponse:
     from terminal_proxy.k8s.client import k8s_client
 
