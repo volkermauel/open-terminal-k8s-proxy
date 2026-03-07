@@ -29,7 +29,7 @@ def get_or_create_proxy_api_key() -> str:
     if settings.proxy_api_key:
         return settings.proxy_api_key
     key = secrets.token_urlsafe(32)
-    logger.info(f"Generated proxy API key: {key[:8]}...")
+    logger.info("Generated proxy API key")
     return key
 
 
@@ -56,12 +56,10 @@ def extract_user_id(request: Request) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from terminal_proxy.k8s.client import k8s_client
+    from terminal_proxy.logging_config import setup_logging
     from terminal_proxy.storage import storage_manager
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    setup_logging()
 
     k8s_client.init()
     logger.info("Kubernetes client initialized")
@@ -97,6 +95,24 @@ app.add_middleware(
 @app.get("/health", include_in_schema=False)
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    stats = pod_manager.get_stats()
+    metrics_text = f"""# HELP active_pods Number of active terminal pods
+# TYPE active_pods gauge
+active_pods {stats["active_pods"]}
+
+# HELP max_pods Maximum allowed terminal pods
+# TYPE max_pods gauge
+max_pods {stats["max_pods"]}
+
+# HELP storage_mode Current storage mode
+# TYPE storage_mode gauge
+storage_mode{{mode="{settings.storage_mode.value}"}} 1
+"""
+    return Response(content=metrics_text, media_type="text/plain")
 
 
 @app.get(
@@ -276,13 +292,12 @@ async def proxy_terminal_session(
 
 @app.websocket("/api/terminals/{session_id}")
 async def websocket_terminal(client_ws: WebSocket, session_id: str):
+    import json
+
     await client_ws.accept()
 
     if PROXY_API_KEY:
         try:
-            import asyncio
-            import json
-
             raw = await asyncio.wait_for(client_ws.receive_text(), timeout=10.0)
             payload = json.loads(raw)
             if payload.get("type") != "auth" or payload.get("token") != PROXY_API_KEY:

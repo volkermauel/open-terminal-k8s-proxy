@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Optional
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class StorageMode(str, Enum):
@@ -16,7 +16,7 @@ class StorageMode(str, Enum):
 
 
 class Settings(BaseSettings):
-    model_config = "Settings"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     proxy_api_key: str = Field(
         default="",
