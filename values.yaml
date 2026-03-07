@@ -1,0 +1,57 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/open-webui/open-terminal-k8s-proxy
+  pullPolicy: IfNotPresent
+  tag: latest
+
+terminalImage:
+  repository: ghcr.io/open-webui/open-terminal
+  pullPolicy: IfNotPresent
+  tag: latest
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+terminalResources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 4Gi
+
+storage:
+  mode: perUser
+  className: ""
+  perUser:
+    size: 5Gi
+  shared:
+    size: 100Gi
+
+maxConcurrentPods: 100
+podIdleTimeoutSeconds: 300
+podStartupTimeoutSeconds: 60
+podCleanupIntervalSeconds: 60
+
+proxyApiKey: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
