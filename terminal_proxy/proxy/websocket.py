@@ -42,23 +42,28 @@ class WebSocketProxy:
         session = await self.get_session()
 
         ws_url = f"ws://{terminal.service_name}:8000{path}"
+        logger.info(f"Connecting to upstream WebSocket: {ws_url}")
 
         try:
             async with session.ws_connect(
                 ws_url,
                 headers={"Authorization": f"Bearer {terminal.api_key}"},
             ) as upstream_ws:
+                logger.info(f"Upstream WebSocket connected: {ws_url}")
 
                 async def client_to_upstream() -> None:
                     try:
                         while True:
                             msg = await client_ws.receive()
+                            logger.debug(f"Client message: {msg.get('type')}")
                             if msg["type"] == "websocket.disconnect":
+                                logger.info("Client sent disconnect")
                                 break
-                            elif "bytes" in msg and msg["bytes"]:
-                                await upstream_ws.send_bytes(msg["bytes"])
-                            elif "text" in msg and msg["text"]:
-                                await upstream_ws.send_str(msg["text"])
+                            elif msg["type"] == "websocket.receive":
+                                if "bytes" in msg and msg.get("bytes"):
+                                    await upstream_ws.send_bytes(msg["bytes"])
+                                elif "text" in msg and msg.get("text"):
+                                    await upstream_ws.send_str(msg["text"])
                     except WebSocketDisconnect:
                         logger.debug("Client disconnected")
                     except Exception as e:
