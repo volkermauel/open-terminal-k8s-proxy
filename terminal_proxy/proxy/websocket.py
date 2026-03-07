@@ -15,15 +15,20 @@ logger = logging.getLogger(__name__)
 
 
 class WebSocketProxy:
+    """WebSocket proxy for terminal sessions."""
+
     def __init__(self) -> None:
+        """Initialize the WebSocket proxy."""
         self._session: aiohttp.ClientSession | None = None
 
     async def get_session(self) -> aiohttp.ClientSession:
+        """Get or create the aiohttp client session."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
 
     async def close(self) -> None:
+        """Close the aiohttp client session."""
         if self._session and not self._session.closed:
             await self._session.close()
 
@@ -33,6 +38,7 @@ class WebSocketProxy:
         terminal: TerminalPod,
         path: str,
     ) -> None:
+        """Proxy a WebSocket connection to a terminal pod."""
         await client_ws.accept()
 
         session = await self.get_session()

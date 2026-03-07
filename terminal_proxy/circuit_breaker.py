@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 class CircuitState(StrEnum):
+    """Circuit breaker states."""
+
     CLOSED = "closed"
     OPEN = "open"
     HALF_OPEN = "half_open"
@@ -19,6 +21,8 @@ class CircuitState(StrEnum):
 
 @dataclass
 class CircuitBreaker:
+    """Circuit breaker implementation for managing pod health failures."""
+
     failure_threshold: int = 5
     recovery_timeout: int = 30
     half_open_max_calls: int = 3
@@ -31,9 +35,11 @@ class CircuitBreaker:
 
     @property
     def state(self) -> CircuitState:
+        """Get the current circuit breaker state."""
         return self._state
 
     async def can_execute(self) -> bool:
+        """Check if a request can be executed based on circuit state."""
         async with self._lock:
             if self._state == CircuitState.CLOSED:
                 return True
@@ -55,6 +61,7 @@ class CircuitBreaker:
         return False
 
     async def record_success(self) -> None:
+        """Record a successful operation, potentially closing the circuit."""
         async with self._lock:
             if self._state == CircuitState.HALF_OPEN:
                 logger.info("Circuit breaker recovered, returning to closed state")
@@ -65,6 +72,7 @@ class CircuitBreaker:
                 self._failure_count = 0
 
     async def record_failure(self) -> None:
+        """Record a failed operation, potentially opening the circuit."""
         async with self._lock:
             self._failure_count += 1
             self._last_failure_time = time.time()
@@ -82,15 +90,20 @@ class CircuitBreaker:
 
 
 class CircuitBreakerRegistry:
+    """Registry for managing circuit breakers per terminal pod."""
+
     def __init__(self) -> None:
+        """Initialize the circuit breaker registry."""
         self._breakers: dict[str, CircuitBreaker] = {}
 
     def get(self, key: str) -> CircuitBreaker:
+        """Get or create a circuit breaker for the given key."""
         if key not in self._breakers:
             self._breakers[key] = CircuitBreaker()
         return self._breakers[key]
 
     def remove(self, key: str) -> None:
+        """Remove a circuit breaker from the registry."""
         self._breakers.pop(key, None)
 
 

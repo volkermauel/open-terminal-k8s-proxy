@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 class PodManager:
+    """Manages terminal pod lifecycle and tracking."""
+
     def __init__(self, cfg: Settings):
+        """Initialize the pod manager with configuration."""
         self.cfg = cfg
         self._pods: dict[str, TerminalPod] = {}
         self._lock = asyncio.Lock()
@@ -27,12 +30,14 @@ class PodManager:
         self._health_check_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        """Start the pod manager and cleanup tasks."""
         await self._reconcile_existing_pods()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._health_check_task = asyncio.create_task(self._health_check_loop())
         logger.info("Pod manager started")
 
     async def stop(self) -> None:
+        """Stop the pod manager and cleanup tasks."""
         if self._cleanup_task:
             self._cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -75,6 +80,7 @@ class PodManager:
         return secrets.token_urlsafe(32)
 
     async def get_or_create(self, user_id: str) -> TerminalPod:
+        """Get or create a terminal pod for the given user."""
         user_hash = TerminalPod.create(user_id, "").user_hash
 
         async with self._lock:
@@ -224,6 +230,7 @@ class PodManager:
             await self._delete_pod(user_hash)
 
     def get_stats(self) -> dict[str, Any]:
+        """Get statistics about active pods."""
         return {
             "active_pods": len(self._pods),
             "max_pods": self.cfg.max_concurrent_pods,

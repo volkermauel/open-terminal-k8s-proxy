@@ -12,11 +12,15 @@ logger = logging.getLogger(__name__)
 
 
 class StorageManager:
+    """Manages persistent storage for terminal pods."""
+
     def __init__(self, cfg: Settings):
+        """Initialize the storage manager with configuration."""
         self.cfg = cfg
         self._shared_pvc_node: str | None = None
 
     def ensure_shared_pvc(self) -> str | None:
+        """Ensure shared PVC exists for shared storage modes."""
         if self.cfg.storage_mode == StorageMode.PER_USER:
             return None
 
@@ -48,6 +52,7 @@ class StorageManager:
             raise
 
     def get_shared_pvc_node(self) -> str | None:
+        """Get the node where shared RWO PVC is mounted."""
         if self.cfg.storage_mode != StorageMode.SHARED_RWO:
             return None
 
@@ -58,6 +63,7 @@ class StorageManager:
         return self._shared_pvc_node
 
     def create_user_pvc(self, pvc_name: str, user_hash: str) -> bool:
+        """Create a user-specific PVC for PER_USER storage mode."""
         if self.cfg.storage_mode != StorageMode.PER_USER:
             return False
 
@@ -87,6 +93,7 @@ class StorageManager:
             raise
 
     def delete_user_pvc(self, pvc_name: str) -> None:
+        """Delete a user-specific PVC."""
         if self.cfg.storage_mode != StorageMode.PER_USER:
             return
 

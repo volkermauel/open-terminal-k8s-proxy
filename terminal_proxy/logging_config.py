@@ -13,6 +13,7 @@ class StructuredFormatter(logging.Formatter):
     """JSON-structured log formatter."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format a log record as a JSON-structured string."""
         log_data: dict[str, Any] = {
             "timestamp": self.formatTime(record, self.datefmt),
             "level": record.levelname,

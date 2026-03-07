@@ -26,10 +26,14 @@ STREAMING_CONTENT_TYPES = ("application/octet-stream", "image/", "application/pd
 
 
 class HttpProxy:
+    """HTTP proxy for forwarding requests to terminal pods."""
+
     def __init__(self) -> None:
+        """Initialize the HTTP proxy."""
         self._client: httpx.AsyncClient | None = None
 
     async def get_client(self) -> httpx.AsyncClient:
+        """Get or create the HTTP client."""
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(300.0, connect=10.0),
@@ -38,6 +42,7 @@ class HttpProxy:
         return self._client
 
     async def close(self) -> None:
+        """Close the HTTP client."""
         if self._client:
             await self._client.aclose()
             self._client = None
@@ -49,6 +54,7 @@ class HttpProxy:
         terminal_api_key: str,
         pod_key: str | None = None,
     ) -> Response:
+        """Proxy an HTTP request to a terminal pod with circuit breaker support."""
         if pod_key:
             circuit_breaker = circuit_breaker_registry.get(pod_key)
             if not await circuit_breaker.can_execute():

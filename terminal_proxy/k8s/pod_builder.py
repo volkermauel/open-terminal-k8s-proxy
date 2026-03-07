@@ -20,6 +20,7 @@ def build_pvc_manifest(
     access_mode: str = "ReadWriteOnce",
     labels: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build a Kubernetes PersistentVolumeClaim manifest."""
     spec: dict[str, Any] = {
         "accessModes": [access_mode],
         "resources": {
@@ -54,6 +55,7 @@ def build_pod_manifest(
     node_name: str | None = None,
     node_selector: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build a Kubernetes Pod manifest for a terminal instance."""
     labels = {
         "app": cfg.labels_app,
         "managed-by": cfg.labels_managed_by,
@@ -135,6 +137,7 @@ def build_pod_for_user(
     cfg: Settings,
     shared_pvc_node: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Build pod and optional PVC manifests based on storage mode."""
     pvc_manifest = None
     pvc_name = None
     shared_pvc_name = None

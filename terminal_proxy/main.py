@@ -33,6 +33,7 @@ request_counts: dict[str, list[float]] = defaultdict(list)
 
 
 def get_or_create_proxy_api_key() -> str:
+    """Get or create the proxy API key."""
     if settings.proxy_api_key:
         return settings.proxy_api_key
     key = secrets.token_urlsafe(32)
@@ -46,6 +47,7 @@ PROXY_API_KEY = get_or_create_proxy_api_key()
 async def verify_api_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> str:
+    """Verify the API key from the Authorization header."""
     if not PROXY_API_KEY:
         return "anonymous"
     if not credentials or credentials.credentials != PROXY_API_KEY:
@@ -54,6 +56,7 @@ async def verify_api_key(
 
 
 def extract_user_id(request: Request) -> str:
+    """Extract user ID from request headers."""
     user_id = request.headers.get("X-User-Id")
     if not user_id:
         raise HTTPException(status_code=400, detail="X-User-Id header required")
@@ -62,6 +65,7 @@ def extract_user_id(request: Request) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Manage application lifespan for startup and shutdown."""
     from terminal_proxy.k8s.client import k8s_client
     from terminal_proxy.logging_config import setup_logging
     from terminal_proxy.storage import storage_manager
@@ -93,6 +97,7 @@ app = FastAPI(
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """Rate limit middleware to prevent abuse."""
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
 
@@ -113,6 +118,7 @@ async def rate_limit_middleware(request: Request, call_next: Callable[[Request],
 
 @app.middleware("http")
 async def request_size_limit_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """Middleware to limit request body size."""
     if request.method in ("POST", "PUT", "PATCH"):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > REQUEST_BODY_MAX_SIZE:
@@ -134,6 +140,7 @@ app.add_middleware(
 
 @app.get("/health", include_in_schema=False, response_model=None)
 async def health() -> dict[str, str] | JSONResponse:
+    """Health check endpoint."""
     from terminal_proxy.k8s.client import k8s_client
 
     if not k8s_client._initialized:
@@ -157,6 +164,7 @@ async def health() -> dict[str, str] | JSONResponse:
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
+    """Prometheus metrics endpoint."""
     stats = pod_manager.get_stats()
     metrics_text = f"""# HELP terminal_proxy_active_pods Number of active terminal pods
 # TYPE terminal_proxy_active_pods gauge
@@ -179,6 +187,7 @@ terminal_proxy_storage_mode{{mode="{settings.storage_mode.value}"}} 1
     dependencies=[Depends(verify_api_key)],
 )
 async def get_config() -> dict[str, dict[str, bool]]:
+    """Get proxy configuration."""
     return {
         "features": {
             "terminal": True,
@@ -192,6 +201,7 @@ async def get_config() -> dict[str, dict[str, bool]]:
     dependencies=[Depends(verify_api_key)],
 )
 async def get_status() -> dict[str, Any]:
+    """Get proxy status and statistics."""
     return pod_manager.get_stats()
 
 
@@ -201,6 +211,7 @@ async def get_status() -> dict[str, Any]:
     dependencies=[Depends(verify_api_key)],
 )
 async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
+    """Get current working directory."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -215,6 +226,7 @@ async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> 
     dependencies=[Depends(verify_api_key)],
 )
 async def set_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
+    """Set current working directory."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -233,6 +245,7 @@ async def proxy_files(
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
+    """Proxy file operations to terminal pod."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -250,6 +263,7 @@ async def proxy_execute(
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
+    """Proxy command execution requests."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -269,6 +283,7 @@ async def proxy_execute_process(
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
+    """Proxy process-specific requests."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -286,6 +301,7 @@ async def proxy_ports(
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
+    """Proxy port listing requests."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -302,6 +318,7 @@ async def proxy_port_forward(
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
+    """Proxy port forwarding requests."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -319,6 +336,7 @@ async def proxy_terminals(
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
+    """Proxy terminal session management."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -337,6 +355,7 @@ async def proxy_terminal_session(
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
+    """Proxy terminal session operations."""
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -350,6 +369,7 @@ async def proxy_terminal_session(
 
 @app.websocket("/api/terminals/{session_id}")
 async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
+    """WebSocket endpoint for terminal sessions."""
     import json
 
     await client_ws.accept()
@@ -383,6 +403,7 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
 
 
 def main() -> None:
+    """Start the server."""
     import uvicorn
 
     uvicorn.run(

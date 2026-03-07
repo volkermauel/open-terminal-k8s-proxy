@@ -9,12 +9,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class StorageMode(StrEnum):
+    """Storage mode for persistent volumes."""
+
     PER_USER = "perUser"
     SHARED = "shared"
     SHARED_RWO = "sharedRWO"
 
 
 class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     proxy_api_key: str = Field(
@@ -85,6 +89,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
+        """Parse CORS allowed origins into a list."""
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
 
 

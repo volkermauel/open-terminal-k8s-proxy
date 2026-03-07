@@ -19,18 +19,23 @@ RETRYABLE_EXCEPTIONS = (ApiException, ConnectionError, TimeoutError)
 
 
 def is_retryable_exception(exception: Exception) -> bool:
+    """Check if an exception is retryable based on type and status code."""
     if isinstance(exception, ApiException):
         return exception.status in (429, 500, 502, 503, 504)
     return isinstance(exception, RETRYABLE_EXCEPTIONS)
 
 
 class K8sClient:
+    """Kubernetes API client wrapper with retry logic."""
+
     def __init__(self, namespace: str | None = None):
+        """Initialize the K8s client with optional namespace override."""
         self.namespace = namespace or settings.namespace
         self._core_v1: client.CoreV1Api | None = None
         self._initialized = False
 
     def init(self) -> None:
+        """Initialize the Kubernetes client configuration."""
         if self._initialized:
             return
 
@@ -49,6 +54,7 @@ class K8sClient:
 
     @property
     def core_v1(self) -> client.CoreV1Api:
+        """Get the CoreV1 API client, initializing if necessary."""
         if not self._initialized:
             self.init()
         assert self._core_v1 is not None
@@ -61,6 +67,7 @@ class K8sClient:
         reraise=True,
     )
     def get_pod(self, pod_name: str) -> V1Pod | None:
+        """Get a pod by name, returning None if not found."""
         try:
             return self.core_v1.read_namespaced_pod(pod_name, self.namespace)
         except ApiException as e:
@@ -75,6 +82,7 @@ class K8sClient:
         reraise=True,
     )
     def list_terminal_pods(self) -> V1PodList:
+        """List all terminal pods managed by this proxy."""
         return self.core_v1.list_namespaced_pod(
             self.namespace,
             label_selector=f"app={settings.labels_app},managed-by={settings.labels_managed_by}",
@@ -87,6 +95,7 @@ class K8sClient:
         reraise=True,
     )
     def create_pod(self, pod_manifest: dict[str, Any]) -> V1Pod:
+        """Create a pod from the given manifest."""
         return self.core_v1.create_namespaced_pod(self.namespace, pod_manifest)
 
     @retry(
@@ -96,6 +105,7 @@ class K8sClient:
         reraise=True,
     )
     def delete_pod(self, pod_name: str, grace_period_seconds: int = 30) -> None:
+        """Delete a pod by name, ignoring 404 errors."""
         try:
             self.core_v1.delete_namespaced_pod(
                 pod_name,
@@ -113,6 +123,7 @@ class K8sClient:
         reraise=True,
     )
     def get_pvc(self, pvc_name: str) -> V1PersistentVolumeClaim | None:
+        """Get a PVC by name, returning None if not found."""
         try:
             return self.core_v1.read_namespaced_persistent_volume_claim(pvc_name, self.namespace)
         except ApiException as e:
@@ -127,6 +138,7 @@ class K8sClient:
         reraise=True,
     )
     def create_pvc(self, pvc_manifest: dict[str, Any]) -> V1PersistentVolumeClaim:
+        """Create a PVC from the given manifest."""
         return self.core_v1.create_namespaced_persistent_volume_claim(self.namespace, pvc_manifest)
 
     @retry(
@@ -136,6 +148,7 @@ class K8sClient:
         reraise=True,
     )
     def delete_pvc(self, pvc_name: str) -> None:
+        """Delete a PVC by name, ignoring 404 errors."""
         try:
             self.core_v1.delete_namespaced_persistent_volume_claim(pvc_name, self.namespace)
         except ApiException as e:
@@ -143,6 +156,7 @@ class K8sClient:
                 raise
 
     async def wait_for_pod_ready(self, pod_name: str, timeout_seconds: int = 60) -> tuple[bool, str | None]:
+        """Wait for a pod to become ready, returning (success, pod_ip)."""
         import asyncio
 
         start_time = asyncio.get_event_loop().time()
@@ -163,6 +177,7 @@ class K8sClient:
         return False, None
 
     def get_shared_pvc_node(self, pvc_name: str) -> str | None:
+        """Get the node name where pods using the shared PVC are running."""
         pods = self.list_terminal_pods()
         for pod in pods.items:
             for volume in pod.spec.volumes or []:

@@ -27,6 +27,8 @@ def sanitize_k8s_name(name: str) -> str:
 
 
 class PodState(StrEnum):
+    """Terminal pod lifecycle states."""
+
     CREATING = "creating"
     RUNNING = "running"
     FAILED = "failed"
@@ -35,6 +37,8 @@ class PodState(StrEnum):
 
 @dataclass
 class TerminalPod:
+    """Represents a terminal pod and its metadata."""
+
     user_id: str
     user_hash: str
     pod_name: str
@@ -47,12 +51,14 @@ class TerminalPod:
 
     @property
     def endpoint(self) -> str:
+        """Get the HTTP endpoint for the terminal pod."""
         if self.pod_ip:
             return f"http://{self.pod_ip}:8000"
         return f"http://{self.pod_name}.{self.pod_name}:8000"
 
     @classmethod
     def create(cls, user_id: str, api_key: str) -> TerminalPod:
+        """Create a new TerminalPod instance with generated names and timestamps."""
         user_hash = user_id_to_hash(user_id)
         now = datetime.utcnow()
         return cls(
@@ -69,6 +75,8 @@ class TerminalPod:
 
 @dataclass
 class StorageInfo:
+    """Information about persistent storage configuration."""
+
     pvc_name: str
     storage_class: str
     size: str
@@ -77,6 +85,8 @@ class StorageInfo:
 
 
 class HealthStatus(BaseModel):
+    """Health check response model."""
+
     status: str = "ok"
     active_pods: int = 0
     max_pods: int = 0
@@ -84,9 +94,13 @@ class HealthStatus(BaseModel):
 
 
 class TerminalListResponse(BaseModel):
+    """Response model for listing terminals."""
+
     terminals: list[dict[str, Any]]
 
 
 class ErrorResponse(BaseModel):
+    """Error response model."""
+
     error: str
     detail: str | None = None
