@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class WebSocketProxy:
-    def __init__(self):
+    def __init__(self) -> None:
         self._session: aiohttp.ClientSession | None = None
 
     async def get_session(self) -> aiohttp.ClientSession:
@@ -45,7 +45,7 @@ class WebSocketProxy:
                 headers={"Authorization": f"Bearer {terminal.api_key}"},
             ) as upstream_ws:
 
-                async def client_to_upstream():
+                async def client_to_upstream() -> None:
                     try:
                         while True:
                             msg = await client_ws.receive()
@@ -60,7 +60,7 @@ class WebSocketProxy:
                     except Exception as e:
                         logger.warning(f"Client to upstream error: {e}")
 
-                async def upstream_to_client():
+                async def upstream_to_client() -> None:
                     try:
                         async for msg in upstream_ws:
                             if msg.type == aiohttp.WSMsgType.BINARY:

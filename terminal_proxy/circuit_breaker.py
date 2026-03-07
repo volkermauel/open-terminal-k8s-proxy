@@ -82,7 +82,7 @@ class CircuitBreaker:
 
 
 class CircuitBreakerRegistry:
-    def __init__(self):
+    def __init__(self) -> None:
         self._breakers: dict[str, CircuitBreaker] = {}
 
     def get(self, key: str) -> CircuitBreaker:

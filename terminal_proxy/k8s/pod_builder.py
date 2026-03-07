@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from terminal_proxy.config import Settings, StorageMode
 from terminal_proxy.models import TerminalPod
@@ -17,27 +18,29 @@ def build_pvc_manifest(
     size: str,
     storage_class_name: str,
     access_mode: str = "ReadWriteOnce",
-    labels: dict | None = None,
-) -> dict:
-    manifest = {
+    labels: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "accessModes": [access_mode],
+        "resources": {
+            "requests": {
+                "storage": size,
+            },
+        },
+    }
+
+    if storage_class_name:
+        spec["storageClassName"] = storage_class_name
+
+    manifest: dict[str, Any] = {
         "apiVersion": "v1",
         "kind": "PersistentVolumeClaim",
         "metadata": {
             "name": pvc_name,
             "labels": labels or {},
         },
-        "spec": {
-            "accessModes": [access_mode],
-            "resources": {
-                "requests": {
-                    "storage": size,
-                },
-            },
-        },
+        "spec": spec,
     }
-
-    if storage_class_name:
-        manifest["spec"]["storageClassName"] = storage_class_name
 
     return manifest
 
@@ -49,8 +52,8 @@ def build_pod_manifest(
     shared_pvc_name: str | None = None,
     shared_sub_path: str | None = None,
     node_name: str | None = None,
-    node_selector: dict | None = None,
-) -> dict:
+    node_selector: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     labels = {
         "app": cfg.labels_app,
         "managed-by": cfg.labels_managed_by,
@@ -103,7 +106,7 @@ def build_pod_manifest(
         "volumeMounts": volume_mounts,
     }
 
-    spec: dict = {
+    spec: dict[str, Any] = {
         "containers": [container],
         "volumes": volumes,
         "restartPolicy": "Never",
@@ -131,7 +134,7 @@ def build_pod_for_user(
     terminal_pod: TerminalPod,
     cfg: Settings,
     shared_pvc_node: str | None = None,
-) -> tuple[dict, dict | None]:
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     pvc_manifest = None
     pvc_name = None
     shared_pvc_name = None
@@ -139,6 +142,8 @@ def build_pod_for_user(
     node_name = None
 
     if cfg.storage_mode == StorageMode.PER_USER:
+        if terminal_pod.pvc_name is None:
+            raise ValueError("pvc_name is required for PER_USER storage mode")
         pvc_manifest = build_pvc_manifest(
             pvc_name=terminal_pod.pvc_name,
             size=cfg.storage_per_user_size,

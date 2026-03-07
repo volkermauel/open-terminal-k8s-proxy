@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 
-from kubernetes import client, config
-from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1PodList
-from kubernetes.client.rest import ApiException
+from kubernetes import client, config  # type: ignore
+from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1PodList  # type: ignore
+from kubernetes.client.rest import ApiException  # type: ignore
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from terminal_proxy.config import settings
@@ -85,7 +86,7 @@ class K8sClient:
         retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
         reraise=True,
     )
-    def create_pod(self, pod_manifest: dict) -> V1Pod:
+    def create_pod(self, pod_manifest: dict[str, Any]) -> V1Pod:
         return self.core_v1.create_namespaced_pod(self.namespace, pod_manifest)
 
     @retry(
@@ -125,7 +126,7 @@ class K8sClient:
         retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
         reraise=True,
     )
-    def create_pvc(self, pvc_manifest: dict) -> V1PersistentVolumeClaim:
+    def create_pvc(self, pvc_manifest: dict[str, Any]) -> V1PersistentVolumeClaim:
         return self.core_v1.create_namespaced_persistent_volume_claim(self.namespace, pvc_manifest)
 
     @retry(
@@ -166,7 +167,7 @@ class K8sClient:
         for pod in pods.items:
             for volume in pod.spec.volumes or []:
                 if volume.persistent_volume_claim and volume.persistent_volume_claim.claim_name == pvc_name:
-                    return pod.spec.node_name
+                    return cast(str | None, pod.spec.node_name)
         return None
 
 
