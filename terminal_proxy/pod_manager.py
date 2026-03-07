@@ -58,15 +58,19 @@ class PodManager:
                     continue
 
                 if pod.status.phase == "Running":
+                    secret_name = f"terminal-secret-{user_hash}"
+                    api_key = self._get_api_key_from_secret(secret_name)
+
                     terminal = TerminalPod(
                         user_id=user_hash,
                         user_hash=user_hash,
                         pod_name=pod.metadata.name,
                         service_name=f"terminal-{user_hash}",
+                        secret_name=secret_name,
                         pvc_name=f"pvc-{user_hash}"
                         if self.cfg.storage_mode == StorageMode.PER_USER
                         else None,
-                        api_key=self._generate_api_key(),
+                        api_key=api_key,
                         state=PodState.RUNNING,
                         created_at=pod.metadata.creation_timestamp or datetime.utcnow(),
                         last_active_at=datetime.utcnow(),
@@ -77,9 +81,21 @@ class PodManager:
                 else:
                     k8s_client.delete_service(f"terminal-{user_hash}")
                     k8s_client.delete_pod(pod.metadata.name)
+                    k8s_client.delete_secret(f"terminal-secret-{user_hash}")
                     logger.info(f"Deleted non-running pod {pod.metadata.name}")
         except Exception as e:
             logger.error(f"Failed to reconcile existing pods: {e}")
+
+    def _get_api_key_from_secret(self, secret_name: str) -> str:
+        """Retrieve API key from a Kubernetes secret."""
+        import base64
+
+        secret = k8s_client.get_secret(secret_name)
+        if secret and secret.data and "api-key" in secret.data:
+            return base64.b64decode(secret.data["api-key"]).decode()
+        new_key = self._generate_api_key()
+        logger.warning(f"Secret {secret_name} not found or invalid, generated new key")
+        return new_key
 
     def _generate_api_key(self) -> str:
         return secrets.token_urlsafe(32)
@@ -122,11 +138,14 @@ class PodManager:
             if self.cfg.storage_mode == StorageMode.PER_USER and terminal.pvc_name:
                 storage_manager.create_user_pvc(terminal.pvc_name, terminal.user_hash)
 
-            pod_manifest, pvc_manifest, service_manifest = build_pod_for_user(
+            pod_manifest, pvc_manifest, secret_manifest, service_manifest = build_pod_for_user(
                 terminal_pod=terminal,
                 cfg=self.cfg,
                 shared_pvc_node=shared_pvc_node,
             )
+
+            k8s_client.create_secret(secret_manifest)
+            logger.info(f"Created secret {terminal.secret_name} for user {terminal.user_hash}")
 
             k8s_client.create_pod(pod_manifest)
             logger.info(f"Created pod {terminal.pod_name} for user {terminal.user_hash}")
@@ -154,6 +173,7 @@ class PodManager:
                 logger.error(f"Pod {terminal.pod_name} failed to start")
                 k8s_client.delete_service(terminal.service_name)
                 k8s_client.delete_pod(terminal.pod_name)
+                k8s_client.delete_secret(terminal.secret_name)
                 raise RuntimeError(f"Pod {terminal.pod_name} failed to become ready")
 
         except Exception as e:
@@ -187,6 +207,12 @@ class PodManager:
             logger.info(f"Deleted pod {terminal.pod_name}")
         except Exception as e:
             logger.warning(f"Failed to delete pod {terminal.pod_name}: {e}")
+
+        try:
+            k8s_client.delete_secret(terminal.secret_name)
+            logger.info(f"Deleted secret {terminal.secret_name}")
+        except Exception as e:
+            logger.warning(f"Failed to delete secret {terminal.secret_name}: {e}")
 
         if terminal.pvc_name and self.cfg.storage_mode == StorageMode.PER_USER:
             try:

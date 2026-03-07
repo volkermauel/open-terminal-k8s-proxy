@@ -43,6 +43,7 @@ class TerminalPod:
     user_hash: str
     pod_name: str
     service_name: str
+    secret_name: str
     pvc_name: str | None
     api_key: str
     state: PodState
@@ -65,6 +66,7 @@ class TerminalPod:
             user_hash=user_hash,
             pod_name=f"terminal-{user_hash}",
             service_name=f"terminal-{user_hash}",
+            secret_name=f"terminal-secret-{user_hash}",
             pvc_name=f"pvc-{user_hash}",
             api_key=api_key,
             state=PodState.CREATING,
