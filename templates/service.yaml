@@ -1,16 +1,16 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: { { include "name" . } }
+  name: {{ include "name" . }}
   labels:
-    app.kubernetes.io/name: { { include "name" . } }
+    app.kubernetes.io/name: {{ include "name" . }}
     app.kubernetes.io/managed-by: Helm
 spec:
-  type: { { .Values.service.type } }
+  type: {{ .Values.service.type }}
   ports:
-    - port: { { .Values.service.port } }
+    - port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
       name: http
   selector:
-    app.kubernetes.io/name: { { include "name" . } }
+    app.kubernetes.io/name: {{ include "name" . }}

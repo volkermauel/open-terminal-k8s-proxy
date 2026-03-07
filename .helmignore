@@ -1,0 +1,15 @@
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
+open_terminal_k8s_proxy.egg-info
+tests
+coverage.xml
+*.pyc
+__pycache__
+.venv
+venv
+.env
+.idea
+.vscode

@@ -104,3 +104,9 @@ class ErrorResponse(BaseModel):
 
     error: str
     detail: str | None = None
+
+
+class K8sUnavailableError(Exception):
+    """Raised when Kubernetes API is unavailable."""
+
+    pass

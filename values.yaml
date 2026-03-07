@@ -1,9 +1,9 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/open-webui/open-terminal-k8s-proxy
-  pullPolicy: IfNotPresent
-  tag: latest
+  repository: ghcr.io/volkermauel/open-terminal-k8s-proxy
+  pullPolicy: Always
+  tag: main
 
 terminalImage:
   repository: ghcr.io/open-webui/open-terminal

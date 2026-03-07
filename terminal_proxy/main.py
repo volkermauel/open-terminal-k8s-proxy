@@ -18,7 +18,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from terminal_proxy import __version__
 from terminal_proxy.config import settings
-from terminal_proxy.models import PodState
+from terminal_proxy.metrics import format_prometheus_metrics, record_request, update_pod_states
+from terminal_proxy.models import K8sUnavailableError, PodState, TerminalPod
 from terminal_proxy.pod_manager import pod_manager
 from terminal_proxy.proxy.http import http_proxy
 from terminal_proxy.proxy.websocket import ws_proxy
@@ -63,6 +64,38 @@ def extract_user_id(request: Request) -> str:
     return user_id
 
 
+def ensure_k8s_available() -> None:
+    """Ensure Kubernetes API is available, raise K8sUnavailableError if not."""
+    from terminal_proxy.k8s.client import k8s_client
+
+    if not k8s_client._initialized:
+        try:
+            k8s_client.init()
+        except Exception as e:
+            raise K8sUnavailableError(f"Kubernetes API initialization failed: {e}") from e
+
+
+async def get_terminal_for_user(user_id: str) -> TerminalPod:
+    """Get or create terminal pod with graceful error handling."""
+    from kubernetes.client.rest import ApiException
+
+    ensure_k8s_available()
+
+    try:
+        terminal = await pod_manager.get_or_create(user_id)
+        if terminal.state != PodState.RUNNING:
+            raise HTTPException(status_code=503, detail="Terminal not ready")
+        return terminal
+    except ApiException as e:
+        logger.error(f"K8s API error getting terminal for user {user_id}: {e}")
+        raise K8sUnavailableError(f"Kubernetes API error: {e}") from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error getting terminal for user {user_id}: {e}")
+        raise K8sUnavailableError(f"Failed to get terminal: {e}") from e
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage application lifespan for startup and shutdown."""
@@ -72,11 +105,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     setup_logging()
 
-    k8s_client.init()
-    logger.info("Kubernetes client initialized")
+    try:
+        k8s_client.init()
+        logger.info("Kubernetes client initialized")
+    except Exception as e:
+        logger.warning(f"Kubernetes client initialization failed: {e}. Will retry on demand.")
 
-    if settings.storage_mode in ("shared", "sharedRWO"):
-        storage_manager.ensure_shared_pvc()
+    try:
+        if settings.storage_mode in ("shared", "sharedRWO"):
+            storage_manager.ensure_shared_pvc()
+    except Exception as e:
+        logger.warning(f"Failed to ensure shared PVC: {e}")
 
     await pod_manager.start()
 
@@ -95,17 +134,32 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(K8sUnavailableError)
+async def k8s_unavailable_handler(request: Request, exc: K8sUnavailableError) -> JSONResponse:
+    """Handle K8s API unavailability gracefully."""
+    logger.error(f"K8s API unavailable: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "Service temporarily unavailable",
+            "detail": "Kubernetes API is unavailable",
+        },
+    )
+
+
 @app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+async def rate_limit_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """Rate limit middleware to prevent abuse."""
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
 
-    request_counts[client_ip] = [
-        ts for ts in request_counts[client_ip] if now - ts < 60
-    ]
+    request_counts[client_ip] = [ts for ts in request_counts[client_ip] if now - ts < 60]
 
     if len(request_counts[client_ip]) >= REQUESTS_PER_MINUTE:
+        latency = time.time() - now
+        record_request(request.method, request.url.path, latency, 429)
         return JSONResponse(
             status_code=429,
             content={"error": "Rate limit exceeded", "detail": "Too many requests"},
@@ -113,21 +167,33 @@ async def rate_limit_middleware(request: Request, call_next: Callable[[Request],
 
     request_counts[client_ip].append(now)
 
-    return await call_next(request)
+    start_time = time.time()
+    response = await call_next(request)
+    latency = time.time() - start_time
+    record_request(request.method, request.url.path, latency, response.status_code)
+
+    return response
 
 
 @app.middleware("http")
-async def request_size_limit_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+async def request_size_limit_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """Middleware to limit request body size."""
     if request.method in ("POST", "PUT", "PATCH"):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > REQUEST_BODY_MAX_SIZE:
+            record_request(request.method, request.url.path, 0, 413)
             return JSONResponse(
                 status_code=413,
-                content={"error": "Payload too large", "detail": f"Maximum size is {REQUEST_BODY_MAX_SIZE} bytes"},
+                content={
+                    "error": "Payload too large",
+                    "detail": f"Maximum size is {REQUEST_BODY_MAX_SIZE} bytes",
+                },
             )
 
     return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -139,7 +205,7 @@ app.add_middleware(
 
 
 @app.get("/health", include_in_schema=False, response_model=None)
-async def health() -> dict[str, str] | JSONResponse:
+async def health() -> dict[str, str | int] | JSONResponse:
     """Health check endpoint."""
     from terminal_proxy.k8s.client import k8s_client
 
@@ -148,36 +214,44 @@ async def health() -> dict[str, str] | JSONResponse:
 
     k8s_healthy = False
     try:
-        k8s_client.core_v1.read_namespace(k8s_client.namespace)
+        k8s_client.core_v1.list_namespaced_pod(k8s_client.namespace, limit=1)
         k8s_healthy = True
     except Exception as e:
         logger.warning(f"K8s health check failed: {e}")
 
+    stats = pod_manager.get_stats()
+    update_pod_states({h: (t, t.state) for h, t in pod_manager._pods.items()})
+
     if not k8s_healthy:
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "k8s": "disconnected"},
+            content={
+                "status": "unhealthy",
+                "k8s": "disconnected",
+                "active_pods": stats["active_pods"],
+                "max_pods": stats["max_pods"],
+            },
         )
 
-    return {"status": "ok", "k8s": "connected"}
+    return {
+        "status": "ok",
+        "k8s": "connected",
+        "active_pods": stats["active_pods"],
+        "max_pods": stats["max_pods"],
+        "storage_mode": settings.storage_mode.value,
+    }
 
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
     """Prometheus metrics endpoint."""
     stats = pod_manager.get_stats()
-    metrics_text = f"""# HELP terminal_proxy_active_pods Number of active terminal pods
-# TYPE terminal_proxy_active_pods gauge
-terminal_proxy_active_pods {stats["active_pods"]}
-
-# HELP terminal_proxy_max_pods Maximum allowed terminal pods
-# TYPE terminal_proxy_max_pods gauge
-terminal_proxy_max_pods {stats["max_pods"]}
-
-# HELP terminal_proxy_storage_mode Current storage mode (1=perUser, 2=shared, 3=sharedRWO)
-# TYPE terminal_proxy_storage_mode gauge
-terminal_proxy_storage_mode{{mode="{settings.storage_mode.value}"}} 1
-"""
+    update_pod_states({h: (t, t.state) for h, t in pod_manager._pods.items()})
+    metrics_text = format_prometheus_metrics(
+        active_pods=stats["active_pods"],
+        max_pods=stats["max_pods"],
+        storage_mode=settings.storage_mode.value,
+    )
     return Response(content=metrics_text, media_type="text/plain; charset=utf-8")
 
 
@@ -212,9 +286,7 @@ async def get_status() -> dict[str, Any]:
 )
 async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Get current working directory."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/files/cwd"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
@@ -227,9 +299,7 @@ async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> 
 )
 async def set_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Set current working directory."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/files/cwd"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
@@ -246,15 +316,15 @@ async def proxy_files(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy file operations to terminal pod."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/files/{path}"
     if request.query_params:
         target_url += f"?{request.query_params}"
 
-    return await http_proxy.proxy_request(target_url, request, terminal.api_key, pod_key=terminal.user_hash)
+    return await http_proxy.proxy_request(
+        target_url, request, terminal.api_key, pod_key=terminal.user_hash
+    )
 
 
 @app.api_route("/execute", methods=["GET", "POST"])
@@ -264,9 +334,7 @@ async def proxy_execute(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy command execution requests."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/execute"
     if request.query_params:
@@ -284,9 +352,7 @@ async def proxy_execute_process(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy process-specific requests."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/execute/{process_id}/{path}"
     if request.query_params:
@@ -302,9 +368,7 @@ async def proxy_ports(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy port listing requests."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/ports"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
@@ -319,9 +383,7 @@ async def proxy_port_forward(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy port forwarding requests."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/proxy/{port}/{path}"
     if request.query_params:
@@ -337,9 +399,7 @@ async def proxy_terminals(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy terminal session management."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/api/terminals"
     if request.query_params:
@@ -356,9 +416,7 @@ async def proxy_terminal_session(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy terminal session operations."""
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    terminal = await get_terminal_for_user(user_id)
 
     target_url = f"http://{terminal.pod_ip}:8000/api/terminals/{session_id}"
     if request.query_params:
@@ -379,20 +437,26 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
             raw = await asyncio.wait_for(client_ws.receive_text(), timeout=10.0)
             payload = json.loads(raw)
             if payload.get("type") != "auth" or payload.get("token") != PROXY_API_KEY:
-                await client_ws.close(code=4001, reason="Invalid API key")
+                await client_ws.close(code=1008, reason="Policy Violation: Invalid API key")
                 return
         except (TimeoutError, json.JSONDecodeError, Exception):
-            await client_ws.close(code=4001, reason="Auth timeout or invalid payload")
+            await client_ws.close(
+                code=1008, reason="Policy Violation: Auth timeout or invalid payload"
+            )
             return
 
     user_id = client_ws.query_params.get("user_id")
     if not user_id:
-        await client_ws.close(code=4002, reason="user_id query param required")
+        await client_ws.close(code=1008, reason="Policy Violation: user_id query param required")
         return
 
-    terminal = await pod_manager.get_or_create(user_id)
-    if terminal.state != PodState.RUNNING:
-        await client_ws.close(code=5031, reason="Terminal not ready")
+    try:
+        terminal = await get_terminal_for_user(user_id)
+    except K8sUnavailableError as e:
+        await client_ws.close(code=1011, reason=f"Internal Error: {e}")
+        return
+    except HTTPException as e:
+        await client_ws.close(code=1011, reason=f"Internal Error: {e.detail}")
         return
 
     await ws_proxy.proxy_websocket(

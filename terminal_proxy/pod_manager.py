@@ -12,6 +12,7 @@ from typing import Any
 from terminal_proxy.config import Settings, StorageMode, settings
 from terminal_proxy.k8s.client import k8s_client
 from terminal_proxy.k8s.pod_builder import build_pod_for_user
+from terminal_proxy.metrics import record_pod_startup
 from terminal_proxy.models import PodState, TerminalPod
 from terminal_proxy.storage import storage_manager
 
@@ -107,6 +108,7 @@ class PodManager:
             return terminal
 
     async def _create_pod_resources(self, terminal: TerminalPod) -> None:
+        startup_start = datetime.utcnow()
         try:
             if self.cfg.storage_mode in (StorageMode.SHARED, StorageMode.SHARED_RWO):
                 storage_manager.ensure_shared_pvc()
@@ -130,10 +132,13 @@ class PodManager:
                 timeout_seconds=self.cfg.pod_startup_timeout_seconds,
             )
 
+            startup_duration = (datetime.utcnow() - startup_start).total_seconds()
+            record_pod_startup(terminal.user_hash, startup_duration)
+
             if ready and pod_ip:
                 terminal.state = PodState.RUNNING
                 terminal.pod_ip = pod_ip
-                logger.info(f"Pod {terminal.pod_name} is ready at {pod_ip}")
+                logger.info(f"Pod {terminal.pod_name} is ready at {pod_ip} (startup: {startup_duration:.2f}s)")
             else:
                 terminal.state = PodState.FAILED
                 logger.error(f"Pod {terminal.pod_name} failed to start")

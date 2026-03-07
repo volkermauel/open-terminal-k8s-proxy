@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
-from kubernetes import client, config  # type: ignore
-from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1PodList  # type: ignore
-from kubernetes.client.rest import ApiException  # type: ignore
+from kubernetes import client, config
+from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1PodList
+from kubernetes.client.rest import ApiException
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from terminal_proxy.config import settings
