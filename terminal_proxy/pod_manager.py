@@ -7,6 +7,7 @@ import contextlib
 import logging
 import secrets
 from datetime import datetime
+from typing import Any
 
 from terminal_proxy.config import Settings, StorageMode, settings
 from terminal_proxy.k8s.client import k8s_client
@@ -22,8 +23,8 @@ class PodManager:
         self.cfg = cfg
         self._pods: dict[str, TerminalPod] = {}
         self._lock = asyncio.Lock()
-        self._cleanup_task: asyncio.Task | None = None
-        self._health_check_task: asyncio.Task | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
+        self._health_check_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await self._reconcile_existing_pods()
@@ -217,12 +218,12 @@ class PodManager:
                 logger.warning(f"Failed to check health of pod {terminal.pod_name}: {e}")
 
         for user_hash in to_remove:
-            terminal = self._pods.get(user_hash)
-            if terminal:
-                terminal.state = PodState.FAILED
+            terminal_to_fail = self._pods.get(user_hash)
+            if terminal_to_fail:
+                terminal_to_fail.state = PodState.FAILED
             await self._delete_pod(user_hash)
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         return {
             "active_pods": len(self._pods),
             "max_pods": self.cfg.max_concurrent_pods,

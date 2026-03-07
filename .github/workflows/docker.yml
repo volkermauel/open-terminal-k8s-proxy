@@ -39,6 +39,9 @@ jobs:
       - name: Run linter
         run: ruff check terminal_proxy tests
 
+      - name: Run mypy
+        run: mypy terminal_proxy
+
       - name: Run tests
         run: pytest tests -v --tb=short
 

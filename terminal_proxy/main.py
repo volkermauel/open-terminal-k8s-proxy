@@ -8,6 +8,7 @@ import secrets
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,7 +60,7 @@ def extract_user_id(request: Request) -> str:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from terminal_proxy.k8s.client import k8s_client
     from terminal_proxy.logging_config import setup_logging
     from terminal_proxy.storage import storage_manager
@@ -90,7 +91,7 @@ app = FastAPI(
 
 
 @app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
+async def rate_limit_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
 
@@ -110,7 +111,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
 
 @app.middleware("http")
-async def request_size_limit_middleware(request: Request, call_next):
+async def request_size_limit_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     if request.method in ("POST", "PUT", "PATCH"):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > REQUEST_BODY_MAX_SIZE:
@@ -131,7 +132,7 @@ app.add_middleware(
 
 
 @app.get("/health", include_in_schema=False)
-async def health():
+async def health() -> dict[str, str] | JSONResponse:
     from terminal_proxy.k8s.client import k8s_client
 
     if not k8s_client._initialized:
@@ -154,7 +155,7 @@ async def health():
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics():
+async def metrics() -> Response:
     stats = pod_manager.get_stats()
     metrics_text = f"""# HELP terminal_proxy_active_pods Number of active terminal pods
 # TYPE terminal_proxy_active_pods gauge
@@ -176,7 +177,7 @@ terminal_proxy_storage_mode{{mode="{settings.storage_mode.value}"}} 1
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
 )
-async def get_config():
+async def get_config() -> dict[str, dict[str, bool]]:
     return {
         "features": {
             "terminal": True,
@@ -189,7 +190,7 @@ async def get_config():
     "/api/status",
     dependencies=[Depends(verify_api_key)],
 )
-async def get_status():
+async def get_status() -> dict[str, Any]:
     return pod_manager.get_stats()
 
 
@@ -198,7 +199,7 @@ async def get_status():
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
 )
-async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)):
+async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -212,7 +213,7 @@ async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)):
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
 )
-async def set_cwd(request: Request, user_id: str = Depends(extract_user_id)):
+async def set_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -230,7 +231,7 @@ async def proxy_files(
     request: Request,
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
-):
+) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -247,7 +248,7 @@ async def proxy_execute(
     request: Request,
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
-):
+) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -266,7 +267,7 @@ async def proxy_execute_process(
     request: Request,
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
-):
+) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -283,7 +284,7 @@ async def proxy_ports(
     request: Request,
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
-):
+) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -299,7 +300,7 @@ async def proxy_port_forward(
     request: Request,
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
-):
+) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -316,7 +317,7 @@ async def proxy_terminals(
     request: Request,
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
-):
+) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -334,7 +335,7 @@ async def proxy_terminal_session(
     request: Request,
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
-):
+) -> Response:
     terminal = await pod_manager.get_or_create(user_id)
     if terminal.state != PodState.RUNNING:
         raise HTTPException(status_code=503, detail="Terminal not ready")
@@ -347,7 +348,7 @@ async def proxy_terminal_session(
 
 
 @app.websocket("/api/terminals/{session_id}")
-async def websocket_terminal(client_ws: WebSocket, session_id: str):
+async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
     import json
 
     await client_ws.accept()
@@ -380,7 +381,7 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str):
     )
 
 
-def main():
+def main() -> None:
     import uvicorn
 
     uvicorn.run(

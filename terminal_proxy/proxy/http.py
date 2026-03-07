@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import AsyncIterator
 
 import httpx
 from fastapi import Request
@@ -25,7 +26,7 @@ STREAMING_CONTENT_TYPES = ("application/octet-stream", "image/", "application/pd
 
 
 class HttpProxy:
-    def __init__(self):
+    def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
 
     async def get_client(self) -> httpx.AsyncClient:
@@ -107,7 +108,7 @@ class HttpProxy:
         content_type = response.headers.get("content-type", "")
         if any(ct in content_type for ct in STREAMING_CONTENT_TYPES):
 
-            async def stream():
+            async def stream() -> AsyncIterator[bytes]:
                 async for chunk in response.aiter_bytes():
                     yield chunk
 
