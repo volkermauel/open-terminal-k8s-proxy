@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 
 import aiohttp
@@ -45,11 +46,10 @@ class WebSocketProxy:
         logger.info(f"Connecting to upstream WebSocket: {ws_url}")
 
         try:
-            async with session.ws_connect(
-                ws_url,
-                headers={"Authorization": f"Bearer {terminal.api_key}"},
-            ) as upstream_ws:
+            async with session.ws_connect(ws_url) as upstream_ws:
                 logger.info(f"Upstream WebSocket connected: {ws_url}")
+
+                await upstream_ws.send_str(json.dumps({"type": "auth", "token": terminal.api_key}))
 
                 async def client_to_upstream() -> None:
                     try:
