@@ -155,22 +155,66 @@ class K8sClient:
             if e.status != 404:
                 raise
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
+    def create_service(self, service_manifest: dict[str, Any]) -> Any:
+        """Create a Service from the given manifest."""
+        return self.core_v1.create_namespaced_service(self.namespace, service_manifest)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
+    def delete_service(self, service_name: str) -> None:
+        """Delete a Service by name, ignoring 404 errors."""
+        try:
+            self.core_v1.delete_namespaced_service(service_name, self.namespace)
+        except ApiException as e:
+            if e.status != 404:
+                raise
+
     async def wait_for_pod_ready(
-        self, pod_name: str, timeout_seconds: int = 60
+        self, pod_name: str, service_name: str, timeout_seconds: int = 60
     ) -> tuple[bool, str | None]:
-        """Wait for a pod to become ready, returning (success, pod_ip)."""
+        """Wait for a pod to become ready and health check passes, returning (success, pod_ip)."""
         import asyncio
 
+        import httpx
+
         start_time = asyncio.get_event_loop().time()
+        pod_ip = None
+
         while asyncio.get_event_loop().time() - start_time < timeout_seconds:
             pod = self.get_pod(pod_name)
             if pod is None:
-                return False, None
+                await asyncio.sleep(0.5)
+                continue
 
             phase = pod.status.phase
             if phase == "Running":
                 if pod.status.pod_ip:
-                    return True, pod.status.pod_ip
+                    pod_ip = pod.status.pod_ip
+
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            health_url = f"http://{service_name}:8000/health"
+                            response = await client.get(health_url, timeout=2.0)
+                            if response.status_code == 200:
+                                logger.info(f"Pod {pod_name} health check passed")
+                                return True, pod_ip
+                            else:
+                                logger.debug(
+                                    f"Pod {pod_name} health check returned {response.status_code}"
+                                )
+                    except (httpx.HTTPError, httpx.ConnectError, httpx.TimeoutException) as e:
+                        logger.debug(f"Pod {pod_name} health check failed: {e}")
+
             elif phase in ("Failed", "Unknown"):
                 return False, None
 

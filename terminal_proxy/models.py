@@ -6,7 +6,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel
@@ -26,7 +26,7 @@ def sanitize_k8s_name(name: str) -> str:
     return name[:63].rstrip("-") or "unknown"
 
 
-class PodState(StrEnum):
+class PodState(str, Enum):
     """Terminal pod lifecycle states."""
 
     CREATING = "creating"
@@ -42,6 +42,7 @@ class TerminalPod:
     user_id: str
     user_hash: str
     pod_name: str
+    service_name: str
     pvc_name: str | None
     api_key: str
     state: PodState
@@ -51,10 +52,8 @@ class TerminalPod:
 
     @property
     def endpoint(self) -> str:
-        """Get the HTTP endpoint for the terminal pod."""
-        if self.pod_ip:
-            return f"http://{self.pod_ip}:8000"
-        return f"http://{self.pod_name}.{self.pod_name}:8000"
+        """Get the HTTP endpoint for the terminal pod via service."""
+        return f"http://{self.service_name}:8000"
 
     @classmethod
     def create(cls, user_id: str, api_key: str) -> TerminalPod:
@@ -65,6 +64,7 @@ class TerminalPod:
             user_id=user_id,
             user_hash=user_hash,
             pod_name=f"terminal-{user_hash}",
+            service_name=f"terminal-{user_hash}",
             pvc_name=f"pvc-{user_hash}",
             api_key=api_key,
             state=PodState.CREATING,

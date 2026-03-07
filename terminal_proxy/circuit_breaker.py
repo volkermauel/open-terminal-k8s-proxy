@@ -6,12 +6,12 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
 
-class CircuitState(StrEnum):
+class CircuitState(str, Enum):
     """Circuit breaker states."""
 
     CLOSED = "closed"
@@ -45,7 +45,10 @@ class CircuitBreaker:
                 return True
 
             if self._state == CircuitState.OPEN:
-                if self._last_failure_time and time.time() - self._last_failure_time >= self.recovery_timeout:
+                if (
+                    self._last_failure_time
+                    and time.time() - self._last_failure_time >= self.recovery_timeout
+                ):
                     self._state = CircuitState.HALF_OPEN
                     self._half_open_calls = 0
                     logger.info("Circuit breaker entering half-open state")
@@ -83,9 +86,7 @@ class CircuitBreaker:
                 self._half_open_calls = 0
             elif self._state == CircuitState.CLOSED:
                 if self._failure_count >= self.failure_threshold:
-                    logger.error(
-                        f"Circuit breaker opened after {self._failure_count} failures"
-                    )
+                    logger.error(f"Circuit breaker opened after {self._failure_count} failures")
                     self._state = CircuitState.OPEN
 
 

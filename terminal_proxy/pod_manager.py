@@ -62,7 +62,10 @@ class PodManager:
                         user_id=user_hash,
                         user_hash=user_hash,
                         pod_name=pod.metadata.name,
-                        pvc_name=f"pvc-{user_hash}" if self.cfg.storage_mode == StorageMode.PER_USER else None,
+                        service_name=f"terminal-{user_hash}",
+                        pvc_name=f"pvc-{user_hash}"
+                        if self.cfg.storage_mode == StorageMode.PER_USER
+                        else None,
                         api_key=self._generate_api_key(),
                         state=PodState.RUNNING,
                         created_at=pod.metadata.creation_timestamp or datetime.utcnow(),
@@ -72,6 +75,7 @@ class PodManager:
                     self._pods[user_hash] = terminal
                     logger.info(f"Reconciled existing pod {pod.metadata.name} for user {user_hash}")
                 else:
+                    k8s_client.delete_service(f"terminal-{user_hash}")
                     k8s_client.delete_pod(pod.metadata.name)
                     logger.info(f"Deleted non-running pod {pod.metadata.name}")
         except Exception as e:
@@ -118,7 +122,7 @@ class PodManager:
             if self.cfg.storage_mode == StorageMode.PER_USER and terminal.pvc_name:
                 storage_manager.create_user_pvc(terminal.pvc_name, terminal.user_hash)
 
-            pod_manifest, pvc_manifest = build_pod_for_user(
+            pod_manifest, pvc_manifest, service_manifest = build_pod_for_user(
                 terminal_pod=terminal,
                 cfg=self.cfg,
                 shared_pvc_node=shared_pvc_node,
@@ -127,8 +131,12 @@ class PodManager:
             k8s_client.create_pod(pod_manifest)
             logger.info(f"Created pod {terminal.pod_name} for user {terminal.user_hash}")
 
+            k8s_client.create_service(service_manifest)
+            logger.info(f"Created service {terminal.service_name} for user {terminal.user_hash}")
+
             ready, pod_ip = await k8s_client.wait_for_pod_ready(
                 terminal.pod_name,
+                terminal.service_name,
                 timeout_seconds=self.cfg.pod_startup_timeout_seconds,
             )
 
@@ -138,10 +146,13 @@ class PodManager:
             if ready and pod_ip:
                 terminal.state = PodState.RUNNING
                 terminal.pod_ip = pod_ip
-                logger.info(f"Pod {terminal.pod_name} is ready at {pod_ip} (startup: {startup_duration:.2f}s)")
+                logger.info(
+                    f"Pod {terminal.pod_name} is ready at {pod_ip} via service {terminal.service_name} (startup: {startup_duration:.2f}s)"
+                )
             else:
                 terminal.state = PodState.FAILED
                 logger.error(f"Pod {terminal.pod_name} failed to start")
+                k8s_client.delete_service(terminal.service_name)
                 k8s_client.delete_pod(terminal.pod_name)
                 raise RuntimeError(f"Pod {terminal.pod_name} failed to become ready")
 
@@ -164,6 +175,12 @@ class PodManager:
         terminal = self._pods.pop(user_hash, None)
         if not terminal:
             return
+
+        try:
+            k8s_client.delete_service(terminal.service_name)
+            logger.info(f"Deleted service {terminal.service_name}")
+        except Exception as e:
+            logger.warning(f"Failed to delete service {terminal.service_name}: {e}")
 
         try:
             k8s_client.delete_pod(terminal.pod_name)

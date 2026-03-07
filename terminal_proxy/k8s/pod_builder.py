@@ -66,19 +66,25 @@ def build_pod_manifest(
     volume_mounts = []
 
     if pvc_name:
-        volumes.append({
-            "name": "user-data",
-            "persistentVolumeClaim": {"claimName": pvc_name},
-        })
-        volume_mounts.append({
-            "name": "user-data",
-            "mountPath": "/data",
-        })
+        volumes.append(
+            {
+                "name": "user-data",
+                "persistentVolumeClaim": {"claimName": pvc_name},
+            }
+        )
+        volume_mounts.append(
+            {
+                "name": "user-data",
+                "mountPath": "/data",
+            }
+        )
     elif shared_pvc_name:
-        volumes.append({
-            "name": "shared-data",
-            "persistentVolumeClaim": {"claimName": shared_pvc_name},
-        })
+        volumes.append(
+            {
+                "name": "shared-data",
+                "persistentVolumeClaim": {"claimName": shared_pvc_name},
+            }
+        )
         mount = {
             "name": "shared-data",
             "mountPath": "/data",
@@ -132,12 +138,50 @@ def build_pod_manifest(
     return manifest
 
 
+def build_service_manifest(
+    terminal_pod: TerminalPod,
+    cfg: Settings,
+) -> dict[str, Any]:
+    """Build a Kubernetes Service manifest for a terminal pod."""
+    labels = {
+        "app": cfg.labels_app,
+        "managed-by": cfg.labels_managed_by,
+        "user-id-hash": terminal_pod.user_hash,
+    }
+
+    manifest = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": terminal_pod.service_name,
+            "labels": labels,
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {
+                "app": cfg.labels_app,
+                "user-id-hash": terminal_pod.user_hash,
+            },
+            "ports": [
+                {
+                    "name": "http",
+                    "port": 8000,
+                    "targetPort": cfg.terminal_service_port,
+                    "protocol": "TCP",
+                }
+            ],
+        },
+    }
+
+    return manifest
+
+
 def build_pod_for_user(
     terminal_pod: TerminalPod,
     cfg: Settings,
     shared_pvc_node: str | None = None,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Build pod and optional PVC manifests based on storage mode."""
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
+    """Build pod, optional PVC, and service manifests based on storage mode."""
     pvc_manifest = None
     pvc_name = None
     shared_pvc_name = None
@@ -179,4 +223,6 @@ def build_pod_for_user(
         node_name=node_name,
     )
 
-    return pod_manifest, pvc_manifest
+    service_manifest = build_service_manifest(terminal_pod, cfg)
+
+    return pod_manifest, pvc_manifest, service_manifest
