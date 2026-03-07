@@ -23,10 +23,12 @@ class PodManager:
         self._pods: dict[str, TerminalPod] = {}
         self._lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._health_check_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         await self._reconcile_existing_pods()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        self._health_check_task = asyncio.create_task(self._health_check_loop())
         logger.info("Pod manager started")
 
     async def stop(self) -> None:
@@ -34,6 +36,12 @@ class PodManager:
             self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+        if self._health_check_task:
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
             except asyncio.CancelledError:
                 pass
         logger.info("Pod manager stopped")
@@ -114,7 +122,7 @@ class PodManager:
             k8s_client.create_pod(pod_manifest)
             logger.info(f"Created pod {terminal.pod_name} for user {terminal.user_hash}")
 
-            ready, pod_ip = k8s_client.wait_for_pod_ready(
+            ready, pod_ip = await k8s_client.wait_for_pod_ready(
                 terminal.pod_name,
                 timeout_seconds=self.cfg.pod_startup_timeout_seconds,
             )
@@ -182,6 +190,40 @@ class PodManager:
 
         for user_hash in to_evict:
             logger.info(f"Cleaning up idle pod for user {user_hash}")
+            await self._delete_pod(user_hash)
+
+    async def _health_check_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(30)
+                await self._check_pod_health()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Health check loop error: {e}")
+
+    async def _check_pod_health(self) -> None:
+        to_remove = []
+        
+        for user_hash, terminal in self._pods.items():
+            if terminal.state != PodState.RUNNING:
+                continue
+            
+            try:
+                pod = k8s_client.get_pod(terminal.pod_name)
+                if pod is None or pod.status.phase in ("Failed", "Unknown"):
+                    logger.warning(f"Pod {terminal.pod_name} is unhealthy, marking for removal")
+                    to_remove.append(user_hash)
+                elif pod.status.phase == "Running" and pod.status.pod_ip != terminal.pod_ip:
+                    terminal.pod_ip = pod.status.pod_ip
+                    logger.info(f"Updated pod {terminal.pod_name} IP to {terminal.pod_ip}")
+            except Exception as e:
+                logger.warning(f"Failed to check health of pod {terminal.pod_name}: {e}")
+        
+        for user_hash in to_remove:
+            terminal = self._pods.get(user_hash)
+            if terminal:
+                terminal.state = PodState.FAILED
             await self._delete_pod(user_hash)
 
     def get_stats(self) -> dict:

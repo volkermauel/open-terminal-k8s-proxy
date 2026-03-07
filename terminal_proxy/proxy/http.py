@@ -9,6 +9,7 @@ import httpx
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
+from terminal_proxy.circuit_breaker import circuit_breaker_registry
 from terminal_proxy.config import settings
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,17 @@ class HttpProxy:
         target_url: str,
         request: Request,
         terminal_api_key: str,
+        pod_key: Optional[str] = None,
     ) -> Response:
+        if pod_key:
+            circuit_breaker = circuit_breaker_registry.get(pod_key)
+            if not await circuit_breaker.can_execute():
+                return Response(
+                    content=b'{"error": "Circuit breaker open", "detail": "Terminal pod is temporarily unavailable"}',
+                    status_code=503,
+                    media_type="application/json",
+                )
+        
         client = await self.get_client()
 
         headers = {
@@ -66,13 +77,24 @@ class HttpProxy:
                 content=body or None,
                 params=dict(request.query_params),
             )
-        except httpx.ConnectError:
+            
+            if pod_key:
+                circuit_breaker = circuit_breaker_registry.get(pod_key)
+                await circuit_breaker.record_success()
+                
+        except httpx.ConnectError as e:
+            if pod_key:
+                circuit_breaker = circuit_breaker_registry.get(pod_key)
+                await circuit_breaker.record_failure()
             return Response(
                 content=b'{"error": "Terminal pod unavailable"}',
                 status_code=503,
                 media_type="application/json",
             )
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
+            if pod_key:
+                circuit_breaker = circuit_breaker_registry.get(pod_key)
+                await circuit_breaker.record_failure()
             return Response(
                 content=b'{"error": "Terminal pod timeout"}',
                 status_code=504,

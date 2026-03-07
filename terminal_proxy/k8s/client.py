@@ -9,10 +9,20 @@ from kubernetes import client, config
 from kubernetes.client import V1Pod, V1PersistentVolumeClaim, V1PodList
 from kubernetes.client.rest import ApiException
 from kubernetes.watch import Watch
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from terminal_proxy.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+RETRYABLE_EXCEPTIONS = (ApiException, ConnectionError, TimeoutError)
+
+
+def is_retryable_exception(exception: Exception) -> bool:
+    if isinstance(exception, ApiException):
+        return exception.status in (429, 500, 502, 503, 504)
+    return isinstance(exception, RETRYABLE_EXCEPTIONS)
 
 
 class K8sClient:
@@ -45,6 +55,12 @@ class K8sClient:
         assert self._core_v1 is not None
         return self._core_v1
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
     def get_pod(self, pod_name: str) -> Optional[V1Pod]:
         try:
             return self.core_v1.read_namespaced_pod(pod_name, self.namespace)
@@ -53,15 +69,33 @@ class K8sClient:
                 return None
             raise
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
     def list_terminal_pods(self) -> V1PodList:
         return self.core_v1.list_namespaced_pod(
             self.namespace,
             label_selector=f"app={settings.labels_app},managed-by={settings.labels_managed_by}",
         )
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
     def create_pod(self, pod_manifest: dict) -> V1Pod:
         return self.core_v1.create_namespaced_pod(self.namespace, pod_manifest)
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
     def delete_pod(self, pod_name: str, grace_period_seconds: int = 30) -> None:
         try:
             self.core_v1.delete_namespaced_pod(
@@ -73,6 +107,12 @@ class K8sClient:
             if e.status != 404:
                 raise
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
     def get_pvc(self, pvc_name: str) -> Optional[V1PersistentVolumeClaim]:
         try:
             return self.core_v1.read_namespaced_persistent_volume_claim(pvc_name, self.namespace)
@@ -81,9 +121,21 @@ class K8sClient:
                 return None
             raise
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
     def create_pvc(self, pvc_manifest: dict) -> V1PersistentVolumeClaim:
         return self.core_v1.create_namespaced_persistent_volume_claim(self.namespace, pvc_manifest)
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
     def delete_pvc(self, pvc_name: str) -> None:
         try:
             self.core_v1.delete_namespaced_persistent_volume_claim(pvc_name, self.namespace)
@@ -91,11 +143,11 @@ class K8sClient:
             if e.status != 404:
                 raise
 
-    def wait_for_pod_ready(self, pod_name: str, timeout_seconds: int = 60) -> tuple[bool, Optional[str]]:
-        import time
+    async def wait_for_pod_ready(self, pod_name: str, timeout_seconds: int = 60) -> tuple[bool, Optional[str]]:
+        import asyncio
 
-        start_time = time.monotonic()
-        while time.monotonic() - start_time < timeout_seconds:
+        start_time = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start_time < timeout_seconds:
             pod = self.get_pod(pod_name)
             if pod is None:
                 return False, None
@@ -107,7 +159,7 @@ class K8sClient:
             elif phase in ("Failed", "Unknown"):
                 return False, None
 
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
         return False, None
 

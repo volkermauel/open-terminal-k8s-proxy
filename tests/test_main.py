@@ -14,7 +14,9 @@ def client():
 def test_health_endpoint(client):
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    data = response.json()
+    assert data["status"] == "ok"
+    assert "k8s" in data
 
 
 def test_status_requires_auth(client):

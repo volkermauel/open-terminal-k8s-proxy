@@ -1,33 +1,36 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: { { include "name" . } }
+  name: {{ include "name" . }}
   labels:
-    app.kubernetes.io/name: { { include "name" . } }
+    app.kubernetes.io/name: {{ include "name" . }}
     app.kubernetes.io/managed-by: Helm
 spec:
-  replicas: { { .Values.replicaCount } }
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: { { include "name" . } }
+      app.kubernetes.io/name: {{ include "name" . }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: { { include "name" . } }
+        app.kubernetes.io/name: {{ include "name" . }}
     spec:
-      serviceAccountName:
-        { { .Values.serviceAccount.name | default (include "name" .) } }
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "name" .) }}
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      {{- end }}
       containers:
         - name: proxy
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: { { .Values.image.pullPolicy } }
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: 8000
               protocol: TCP
           env:
             - name: PROXY_API_KEY
-              value: { { .Values.proxyApiKey | quote } }
+              value: {{ .Values.proxyApiKey | quote }}
             - name: NAMESPACE
               valueFrom:
                 fieldRef:
@@ -35,23 +38,23 @@ spec:
             - name: TERMINAL_IMAGE
               value: "{{ .Values.terminalImage.repository }}:{{ .Values.terminalImage.tag }}"
             - name: TERMINAL_IMAGE_PULL_POLICY
-              value: { { .Values.terminalImage.pullPolicy } }
+              value: {{ .Values.terminalImage.pullPolicy }}
             - name: TERMINAL_CPU_REQUEST
-              value: { { .Values.terminalResources.requests.cpu } }
+              value: {{ .Values.terminalResources.requests.cpu }}
             - name: TERMINAL_CPU_LIMIT
-              value: { { .Values.terminalResources.limits.cpu } }
+              value: {{ .Values.terminalResources.limits.cpu }}
             - name: TERMINAL_MEMORY_REQUEST
-              value: { { .Values.terminalResources.requests.memory } }
+              value: {{ .Values.terminalResources.requests.memory }}
             - name: TERMINAL_MEMORY_LIMIT
-              value: { { .Values.terminalResources.limits.memory } }
+              value: {{ .Values.terminalResources.limits.memory }}
             - name: STORAGE_MODE
-              value: { { .Values.storage.mode } }
+              value: {{ .Values.storage.mode }}
             - name: STORAGE_CLASS_NAME
-              value: { { .Values.storage.className | default "" } }
+              value: {{ .Values.storage.className | default "" }}
             - name: STORAGE_PER_USER_SIZE
-              value: { { .Values.storage.perUser.size } }
+              value: {{ .Values.storage.perUser.size }}
             - name: STORAGE_SHARED_SIZE
-              value: { { .Values.storage.shared.size } }
+              value: {{ .Values.storage.shared.size }}
             - name: MAX_CONCURRENT_PODS
               value: "{{ .Values.maxConcurrentPods }}"
             - name: POD_IDLE_TIMEOUT_SECONDS
@@ -62,11 +65,20 @@ spec:
               value: "{{ .Values.podCleanupIntervalSeconds }}"
           resources:
             requests:
-              cpu: { { .Values.resources.requests.cpu } }
-              memory: { { .Values.resources.requests.memory } }
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
             limits:
-              cpu: { { .Values.resources.limits.cpu } }
-              memory: { { .Values.resources.limits.memory } }
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
+          securityContext:
+            runAsNonRoot: {{ .Values.securityContext.runAsNonRoot }}
+            runAsUser: {{ .Values.securityContext.runAsUser }}
+            runAsGroup: {{ .Values.securityContext.runAsGroup }}
+            allowPrivilegeEscalation: {{ .Values.securityContext.allowPrivilegeEscalation }}
+            readOnlyRootFilesystem: {{ .Values.securityContext.readOnlyRootFilesystem }}
+            capabilities:
+              drop:
+                {{- toYaml .Values.securityContext.capabilities.drop | nindent 18 }}
           livenessProbe:
             httpGet:
               path: /health
@@ -79,6 +91,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
-      nodeSelector: { { toYaml .Values.nodeSelector | nindent 8 } }
-      affinity: { { toYaml .Values.affinity | nindent 8 } }
-      tolerations: { { toYaml .Values.tolerations | nindent 8 } }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      affinity: {{ toYaml .Values.affinity | nindent 8 }}
+      tolerations: {{ toYaml .Values.tolerations | nindent 8 }}

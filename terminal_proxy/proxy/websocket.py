@@ -55,8 +55,10 @@ class WebSocketProxy:
                                 await upstream_ws.send_bytes(msg["bytes"])
                             elif "text" in msg and msg["text"]:
                                 await upstream_ws.send_str(msg["text"])
-                    except Exception:
-                        pass
+                    except WebSocketDisconnect:
+                        logger.debug("Client disconnected")
+                    except Exception as e:
+                        logger.warning(f"Client to upstream error: {e}")
 
                 async def upstream_to_client():
                     try:
@@ -67,8 +69,8 @@ class WebSocketProxy:
                                 await client_ws.send_text(msg.data)
                             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
                                 break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Upstream to client error: {e}")
 
                 await asyncio.gather(
                     client_to_upstream(),

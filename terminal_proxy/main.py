@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -23,6 +25,10 @@ from terminal_proxy.proxy.websocket import ws_proxy
 logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+REQUESTS_PER_MINUTE = 300
+REQUEST_BODY_MAX_SIZE = 100 * 1024 * 1024
+request_counts: dict[str, list[float]] = defaultdict(list)
 
 
 def get_or_create_proxy_api_key() -> str:
@@ -83,6 +89,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    
+    request_counts[client_ip] = [
+        ts for ts in request_counts[client_ip] if now - ts < 60
+    ]
+    
+    if len(request_counts[client_ip]) >= REQUESTS_PER_MINUTE:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Rate limit exceeded", "detail": "Too many requests"},
+        )
+    
+    request_counts[client_ip].append(now)
+    
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def request_size_limit_middleware(request: Request, call_next):
+    if request.method in ("POST", "PUT", "PATCH"):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > REQUEST_BODY_MAX_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"error": "Payload too large", "detail": f"Maximum size is {REQUEST_BODY_MAX_SIZE} bytes"},
+            )
+    
+    return await call_next(request)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -94,25 +133,43 @@ app.add_middleware(
 
 @app.get("/health", include_in_schema=False)
 async def health():
-    return {"status": "ok"}
+    from terminal_proxy.k8s.client import k8s_client
+    
+    if not k8s_client._initialized:
+        return {"status": "ok", "k8s": "not_initialized"}
+    
+    k8s_healthy = False
+    try:
+        k8s_client.core_v1.read_namespace(k8s_client.namespace)
+        k8s_healthy = True
+    except Exception as e:
+        logger.warning(f"K8s health check failed: {e}")
+    
+    if not k8s_healthy:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "k8s": "disconnected"},
+        )
+    
+    return {"status": "ok", "k8s": "connected"}
 
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
     stats = pod_manager.get_stats()
-    metrics_text = f"""# HELP active_pods Number of active terminal pods
-# TYPE active_pods gauge
-active_pods {stats["active_pods"]}
+    metrics_text = f"""# HELP terminal_proxy_active_pods Number of active terminal pods
+# TYPE terminal_proxy_active_pods gauge
+terminal_proxy_active_pods {stats["active_pods"]}
 
-# HELP max_pods Maximum allowed terminal pods
-# TYPE max_pods gauge
-max_pods {stats["max_pods"]}
+# HELP terminal_proxy_max_pods Maximum allowed terminal pods
+# TYPE terminal_proxy_max_pods gauge
+terminal_proxy_max_pods {stats["max_pods"]}
 
-# HELP storage_mode Current storage mode
-# TYPE storage_mode gauge
-storage_mode{{mode="{settings.storage_mode.value}"}} 1
+# HELP terminal_proxy_storage_mode Current storage mode (1=perUser, 2=shared, 3=sharedRWO)
+# TYPE terminal_proxy_storage_mode gauge
+terminal_proxy_storage_mode{{mode="{settings.storage_mode.value}"}} 1
 """
-    return Response(content=metrics_text, media_type="text/plain")
+    return Response(content=metrics_text, media_type="text/plain; charset=utf-8")
 
 
 @app.get(
@@ -183,7 +240,7 @@ async def proxy_files(
     if request.query_params:
         target_url += f"?{request.query_params}"
 
-    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key, pod_key=terminal.user_hash)
 
 
 @app.api_route("/execute", methods=["GET", "POST"])
