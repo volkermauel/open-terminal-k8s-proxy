@@ -103,9 +103,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from terminal_proxy.logging_config import setup_logging
     from terminal_proxy.storage import storage_manager
 
+    logger.debug("Starting application lifespan")
     setup_logging()
+    logger.debug("Logging configured")
 
     try:
+        logger.debug("Initializing Kubernetes client")
         k8s_client.init()
         logger.info("Kubernetes client initialized")
     except Exception as e:
@@ -113,17 +116,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     try:
         if settings.storage_mode in ("shared", "sharedRWO"):
+            logger.debug(f"Ensuring shared PVC for storage mode: {settings.storage_mode}")
             storage_manager.ensure_shared_pvc()
     except Exception as e:
         logger.warning(f"Failed to ensure shared PVC: {e}")
 
+    logger.debug("Starting pod manager")
     await pod_manager.start()
+    logger.info("Application started successfully")
 
     yield
 
+    logger.debug("Shutting down application")
     await pod_manager.stop()
     await http_proxy.close()
     await ws_proxy.close()
+    logger.debug("Application shutdown complete")
 
 
 app = FastAPI(

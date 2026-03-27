@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Any
 
 from terminal_proxy.config import settings
+
+
+def is_debug_enabled() -> bool:
+    """Check if debug mode is enabled via DEBUG environment variable."""
+    return os.environ.get("DEBUG", "").lower() in ("true", "1", "yes")
 
 
 class StructuredFormatter(logging.Formatter):
@@ -38,7 +44,11 @@ class StructuredFormatter(logging.Formatter):
 
 def setup_logging() -> None:
     """Configure structured logging for the application."""
-    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    debug_mode = is_debug_enabled()
+    if debug_mode:
+        log_level = logging.DEBUG
+    else:
+        log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(StructuredFormatter())
@@ -47,8 +57,14 @@ def setup_logging() -> None:
     root_logger.setLevel(log_level)
     root_logger.addHandler(handler)
 
-    for logger_name in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
-        logging.getLogger(logger_name).setLevel(log_level)
+    if debug_mode:
+        logging.getLogger("terminal_proxy").setLevel(logging.DEBUG)
+        for logger_name in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
+            logging.getLogger(logger_name).setLevel(logging.DEBUG)
+        root_logger.debug("Debug logging enabled via DEBUG=true")
+    else:
+        for logger_name in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
+            logging.getLogger(logger_name).setLevel(log_level)
 
 
 def get_logger(name: str) -> logging.Logger:
