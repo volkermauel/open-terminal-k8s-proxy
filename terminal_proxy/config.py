@@ -14,6 +14,7 @@ class StorageMode(str, Enum):
     PER_USER = "perUser"
     SHARED = "shared"
     SHARED_RWO = "sharedRWO"
+    EMPTYDIR = "emptyDir"
 
 
 class Settings(BaseSettings):
@@ -67,6 +68,9 @@ class Settings(BaseSettings):
     )
     storage_shared_size: str = Field(
         default="100Gi", description="Shared PVC size (shared/sharedRWO mode)."
+    )
+    storage_emptydir_size_limit: str = Field(
+        default="5Gi", description="sizeLimit for emptyDir volume (emptyDir mode)."
     )
 
     max_concurrent_pods: int = Field(

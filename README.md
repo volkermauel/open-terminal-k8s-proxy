@@ -37,20 +37,21 @@ helm install open-terminal-k8s-proxy ./open-terminal-k8s-proxy \
 
 ### Configuration
 
-| Parameter                           | Default                            | Description                                       |
-| ----------------------------------- | ---------------------------------- | ------------------------------------------------- |
-| `proxyApiKey`                       | (auto-generated)                   | API key for Open WebUI → Proxy                    |
-| `terminalImage.repository`          | `ghcr.io/open-webui/open-terminal` | Terminal container image                          |
-| `terminalImage.tag`                 | `latest`                           | Terminal image tag                                |
-| `storage.mode`                      | `perUser`                          | Storage mode: `perUser`, `shared`, or `sharedRWO` |
-| `storage.perUser.size`              | `5Gi`                              | PVC size per user (perUser mode)                  |
-| `storage.shared.size`               | `100Gi`                            | Shared PVC size (shared modes)                    |
-| `maxConcurrentPods`                 | `100`                              | Maximum concurrent terminal pods                  |
-| `podIdleTimeoutSeconds`             | `300`                              | Idle timeout before pod termination               |
-| `terminalResources.requests.cpu`    | `500m`                             | CPU request per terminal pod                      |
-| `terminalResources.limits.cpu`      | `1000m`                            | CPU limit per terminal pod                        |
-| `terminalResources.requests.memory` | `512Mi`                            | Memory request per terminal pod                   |
-| `terminalResources.limits.memory`   | `4Gi`                              | Memory limit per terminal pod                     |
+| Parameter                           | Default                            | Description                                         |
+|-------------------------------------|------------------------------------|-----------------------------------------------------|
+| `proxyApiKey`                       | (auto-generated)                   | API key for Open WebUI → Proxy                      |
+| `terminalImage.repository`          | `ghcr.io/open-webui/open-terminal` | Terminal container image                            |
+| `terminalImage.tag`                 | `latest`                           | Terminal image tag                                  |
+| `storage.mode`                      | `perUser`                          | Storage mode: `perUser`, `shared`, or `sharedRWO`   |
+| `storage.perUser.size`              | `5Gi`                              | PVC size per user (perUser mode)                    |
+| `storage.shared.size`               | `100Gi`                            | Shared PVC size (shared modes)                      |
+| `storage.emptyDir.size`             | `5Gi`                              | emptyDir sizeLimit per terminal pod (emptyDir mode) |
+| `maxConcurrentPods`                 | `100`                              | Maximum concurrent terminal pods                    |
+| `podIdleTimeoutSeconds`             | `300`                              | Idle timeout before pod termination                 |
+| `terminalResources.requests.cpu`    | `500m`                             | CPU request per terminal pod                        |
+| `terminalResources.limits.cpu`      | `1000m`                            | CPU limit per terminal pod                          |
+| `terminalResources.requests.memory` | `512Mi`                            | Memory request per terminal pod                     |
+| `terminalResources.limits.memory`   | `4Gi`                              | Memory limit per terminal pod                       |
 
 ### Storage Modes
 
@@ -62,6 +63,10 @@ helm install open-terminal-k8s-proxy ./open-terminal-k8s-proxy \
 3. **sharedRWO**: Single PVC with ReadWriteOnce + node affinity
    - Works with standard RWO storage
    - All terminal pods scheduled to same node
+4. **emptyDir:** Ephemeral node-local storage with kubelet-enforced size limits
+   - No PVC created; data lives on the node's root filesystem
+   - `sizeLimit` enforced by kubelet — pod is evicted if exceeded
+   - Data destroyed when pod terminates (idle timeout, eviction, crash)
 
 ## Integration with Open WebUI
 

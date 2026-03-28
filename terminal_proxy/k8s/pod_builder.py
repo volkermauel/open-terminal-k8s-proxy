@@ -79,6 +79,7 @@ def build_pod_manifest(
     node_name: str | None = None,
     node_selector: dict[str, Any] | None = None,
     secret_name: str | None = None,
+    emptydir_size_limit: str | None = None,
 ) -> dict[str, Any]:
     """Build a Kubernetes Pod manifest for a terminal instance."""
     labels = {
@@ -117,6 +118,19 @@ def build_pod_manifest(
         if shared_sub_path:
             mount["subPath"] = shared_sub_path
         volume_mounts.append(mount)
+    elif emptydir_size_limit:
+       volumes.append(
+           {
+               "name": "user-data",
+               "emptyDir": {"sizeLimit": emptydir_size_limit},
+           }
+       )
+       volume_mounts.append(
+           {
+               "name": "user-data",
+               "mountPath": "/data",
+           }
+       )
 
     env_var: dict[str, Any]
     if secret_name:
@@ -252,6 +266,8 @@ def build_pod_for_user(
         shared_sub_path = terminal_pod.user_hash
         if shared_pvc_node:
             node_name = shared_pvc_node
+    elif cfg.storage_mode == StorageMode.EMPTYDIR:
+       pass  # no PVC needed; emptydir_size_limit passed to build_pod_manifest
 
     secret_manifest = build_secret_manifest(
         secret_name=terminal_pod.secret_name,
@@ -267,6 +283,8 @@ def build_pod_for_user(
         shared_sub_path=shared_sub_path,
         node_name=node_name,
         secret_name=terminal_pod.secret_name,
+        emptydir_size_limit=cfg.storage_emptydir_size_limit
+            if cfg.storage_mode == StorageMode.EMPTYDIR else None,
     )
 
     service_manifest = build_service_manifest(terminal_pod, cfg)
