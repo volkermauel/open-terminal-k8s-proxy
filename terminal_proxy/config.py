@@ -55,6 +55,13 @@ class Settings(BaseSettings):
         description="Port that terminal pods listen on.",
     )
 
+    terminal_node_selector: dict[str, str] = Field(
+        default_factory=dict, description="nodeSelector for terminal pods."
+    )
+    terminal_tolerations: list[dict[str, str]] = Field(
+        default_factory=list, description="Tolerations for terminal pods."
+    )
+
     storage_mode: StorageMode = Field(
         default=StorageMode.PER_USER,
         description="Storage mode: perUser, shared (RWX), or sharedRWO (RWO with node affinity).",

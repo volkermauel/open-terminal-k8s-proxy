@@ -176,6 +176,10 @@ def build_pod_manifest(
     if node_selector:
         spec["nodeSelector"] = node_selector
 
+    tolerations = cfg.terminal_tolerations
+    if tolerations:
+        spec["tolerations"] = tolerations
+
     manifest = {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -282,6 +286,7 @@ def build_pod_for_user(
         shared_pvc_name=shared_pvc_name,
         shared_sub_path=shared_sub_path,
         node_name=node_name,
+        node_selector=cfg.terminal_node_selector or None,
         secret_name=terminal_pod.secret_name,
         emptydir_size_limit=cfg.storage_emptydir_size_limit
             if cfg.storage_mode == StorageMode.EMPTYDIR else None,

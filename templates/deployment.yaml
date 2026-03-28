@@ -47,6 +47,10 @@ spec:
               value: {{ .Values.terminalResources.requests.memory }}
             - name: TERMINAL_MEMORY_LIMIT
               value: {{ .Values.terminalResources.limits.memory }}
+            - name: TERMINAL_NODE_SELECTOR
+              value: {{ .Values.terminalNodeSelector | toJson | quote }}
+            - name: TERMINAL_TOLERATIONS
+              value: {{ .Values.terminalTolerations | toJson | quote }}
             - name: STORAGE_MODE
               value: {{ .Values.storage.mode }}
             - name: STORAGE_CLASS_NAME
