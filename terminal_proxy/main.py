@@ -391,8 +391,8 @@ async def proxy_files_display(
 @app.post("/files/write", dependencies=[Depends(verify_api_key)])
 async def proxy_files_write(
     request: Request,
+    body: WriteFileRequest,
     user_id: str = Depends(extract_user_id),
-    body: WriteFileRequest | None = None,
 ) -> Response:
     """Write content to a file. Body must include 'path' and 'content'."""
     terminal = await get_terminal_for_user(user_id)
@@ -404,8 +404,8 @@ async def proxy_files_write(
 @app.post("/files/replace", dependencies=[Depends(verify_api_key)])
 async def proxy_files_replace(
     request: Request,
+    body: ReplaceFileRequest,
     user_id: str = Depends(extract_user_id),
-    body: ReplaceFileRequest | None = None,
 ) -> Response:
     """Replace content in a file. Body must include 'path' and 'replacements' list."""
     terminal = await get_terminal_for_user(user_id)
