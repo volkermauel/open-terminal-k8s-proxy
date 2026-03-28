@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -392,7 +392,7 @@ async def proxy_files_display(
 async def proxy_files_write(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    body: Optional[WriteFileRequest] = None,
+    body: WriteFileRequest | None = None,
 ) -> Response:
     """Write content to a file. Body must include 'path' and 'content'."""
     terminal = await get_terminal_for_user(user_id)
@@ -405,7 +405,7 @@ async def proxy_files_write(
 async def proxy_files_replace(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    body: Optional[ReplaceFileRequest] = None,
+    body: ReplaceFileRequest | None = None,
 ) -> Response:
     """Replace content in a file. Body must include 'path' and 'replacements' list."""
     terminal = await get_terminal_for_user(user_id)
