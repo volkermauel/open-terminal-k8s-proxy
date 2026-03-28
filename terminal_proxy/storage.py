@@ -21,7 +21,7 @@ class StorageManager:
 
     def ensure_shared_pvc(self) -> str | None:
         """Ensure shared PVC exists for shared storage modes."""
-        if self.cfg.storage_mode == StorageMode.PER_USER:
+        if self.cfg.storage_mode not in (StorageMode.SHARED, StorageMode.SHARED_RWO):
             return None
 
         existing = k8s_client.get_pvc(SHARED_PVC_NAME)

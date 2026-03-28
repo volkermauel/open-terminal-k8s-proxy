@@ -119,3 +119,26 @@ def test_get_stats(pod_manager):
     assert stats["active_pods"] == 2
     assert stats["max_pods"] == pod_manager.cfg.max_concurrent_pods
     assert len(stats["pods"]) == 2
+
+@pytest.mark.asyncio
+async def test_get_or_create_emptydir_no_pvc(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.EMPTYDIR,
+    )
+    pm = PodManager(cfg)
+
+    result = await pm.get_or_create("emptydir-user")
+
+    assert result.pvc_name is None
+    mock_storage_manager.create_user_pvc.assert_not_called()
+    mock_k8s_client.create_pod.assert_called_once()
+
+    # Verify the pod manifest has emptyDir volume
+    pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
+    volumes = pod_manifest["spec"]["volumes"]
+    assert any(
+        "emptyDir" in v and v["emptyDir"].get("sizeLimit") == "5Gi"
+        for v in volumes
+    )
