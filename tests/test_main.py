@@ -24,10 +24,20 @@ def test_status_requires_auth(client):
     assert response.status_code == 401
 
 
-def test_files_endpoint_requires_user_id(client):
+def test_files_endpoint_requires_auth(client):
     response = client.get(
         "/files/list",
         headers={"Authorization": "Bearer invalid-key"},
+    )
+    assert response.status_code == 401
+
+
+def test_files_endpoint_requires_user_id(client):
+    from terminal_proxy.main import PROXY_API_KEY
+
+    response = client.get(
+        "/files/list",
+        headers={"Authorization": f"Bearer {PROXY_API_KEY}"},
     )
     assert response.status_code == 400
 

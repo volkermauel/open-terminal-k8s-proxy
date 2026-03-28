@@ -316,7 +316,95 @@ async def set_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> 
 PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
-@app.api_route("/files/{path:path}", methods=PROXY_METHODS)
+@app.get("/files/list", dependencies=[Depends(verify_api_key)])
+async def proxy_files_list(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """List directory contents. Pass 'directory' query param for the path to list."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/files/list", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.get("/files/read", dependencies=[Depends(verify_api_key)])
+async def proxy_files_read(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Read a file. Pass 'path' query param for the file to read."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/files/read", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.get("/files/display", dependencies=[Depends(verify_api_key)])
+async def proxy_files_display(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Display a file to the user. Pass 'path' query param for the file to display."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/files/display", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post("/files/write", dependencies=[Depends(verify_api_key)])
+async def proxy_files_write(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Write content to a file. Body must include 'path' and 'content'."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/files/write", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post("/files/replace", dependencies=[Depends(verify_api_key)])
+async def proxy_files_replace(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Replace content in a file. Body must include 'path', 'old_content', 'new_content'."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/files/replace", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.get("/files/grep", dependencies=[Depends(verify_api_key)])
+async def proxy_files_grep(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Search file contents. Pass 'query' and optional 'path', 'regex', 'include' query params."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/files/grep", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.get("/files/glob", dependencies=[Depends(verify_api_key)])
+async def proxy_files_glob(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Search files by name pattern. Pass 'pattern' and optional 'path', 'exclude', 'type' query params."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/files/glob", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.api_route(
+    "/files/{path:path}",
+    methods=PROXY_METHODS,
+    include_in_schema=False,
+)
 async def proxy_files(
     path: str,
     request: Request,
