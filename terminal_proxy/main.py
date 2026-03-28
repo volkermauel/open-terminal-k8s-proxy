@@ -38,7 +38,7 @@ class WriteFileRequest(BaseModel):
     path: str = Field(
         description="Absolute or relative path to write to. Parent directories are created automatically."
     )
-    content: str = Field(description="Text content to write to the file.")
+    content: str = Field(description="Text content to write to the file. Overwrites if the file already exists.")
 
 
 class ReplacementChunk(BaseModel):
@@ -59,6 +59,21 @@ class ReplaceFileRequest(BaseModel):
     path: str = Field(description="Path to the file to modify.")
     replacements: list[ReplacementChunk] = Field(
         description="List of find-and-replace operations to apply sequentially."
+    )
+
+
+class ExecRequest(BaseModel):
+    command: str = Field(
+        description="Shell command to execute. Supports chaining (&&, ||, ;), pipes (|), and redirections.",
+        examples=["echo hello", "ls -la && whoami", "rm /home/user/file.txt"],
+    )
+    cwd: str | None = Field(
+        None,
+        description="Working directory for the command. Defaults to the server's current directory if not set.",
+    )
+    env: dict[str, str] | None = Field(
+        None,
+        description="Extra environment variables merged into the subprocess environment.",
     )
 
 
@@ -349,9 +364,9 @@ PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 async def proxy_files_list(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    directory: str | None = Query(None, description="Directory path to list."),
+    directory: str | None = Query(None, description="Directory path to list. Defaults to current directory."),
 ) -> Response:
-    """List directory contents. Pass 'directory' query param for the path to list."""
+    """Return a structured listing of files and directories at the given path."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/list", request, terminal.api_key, pod_key=terminal.user_hash
@@ -364,11 +379,13 @@ async def proxy_files_read(
     user_id: str = Depends(extract_user_id),
     path: str = Query(..., description="Path to the file to read."),
     start_line: int | None = Query(
-        None, description="First line to return (1-indexed, inclusive)."
+        None, description="First line to return (1-indexed, inclusive). Defaults to the beginning of the file."
     ),
-    end_line: int | None = Query(None, description="Last line to return (1-indexed, inclusive)."),
+    end_line: int | None = Query(
+        None, description="Last line to return (1-indexed, inclusive). Defaults to the end of the file."
+    ),
 ) -> Response:
-    """Read a file. Pass 'path' query param for the file to read."""
+    """Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). For text files you can optionally request a specific line range. Images are returned as binary so you can view and analyze them directly. Use display to show a file to the user."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/read", request, terminal.api_key, pod_key=terminal.user_hash
@@ -381,7 +398,7 @@ async def proxy_files_display(
     user_id: str = Depends(extract_user_id),
     path: str = Query(..., description="Path to the file to display."),
 ) -> Response:
-    """Display a file to the user. Pass 'path' query param for the file to display."""
+    """Open a file in the user's file viewer so they can see it. Use this when the user wants to view or look at a file. This does not return file content to you — use read if you need to read the content yourself."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/display", request, terminal.api_key, pod_key=terminal.user_hash
@@ -394,7 +411,7 @@ async def proxy_files_write(
     body: WriteFileRequest,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    """Write content to a file. Body must include 'path' and 'content'."""
+    """Write text content to a file. Creates parent directories automatically. Overwrites if the file already exists."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/write", request, terminal.api_key, pod_key=terminal.user_hash
@@ -407,7 +424,7 @@ async def proxy_files_replace(
     body: ReplaceFileRequest,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    """Replace content in a file. Body must include 'path' and 'replacements' list."""
+    """Find and replace exact strings in a file. Supports multiple replacements in one call with optional line range narrowing."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/replace", request, terminal.api_key, pod_key=terminal.user_hash
@@ -418,15 +435,15 @@ async def proxy_files_replace(
 async def proxy_files_grep(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    query: str = Query(..., description="Search query string."),
-    path: str | None = Query(None, description="Directory or file path to search in."),
+    query: str = Query(..., description="Text or regex pattern to search for."),
+    path: str | None = Query(None, description="Directory or file to search in. Defaults to current directory."),
     regex: bool | None = Query(None, description="Treat query as a regex pattern."),
-    case_insensitive: bool | None = Query(None, description="Case-insensitive search."),
-    include: str | None = Query(None, description="Glob pattern for files to include."),
-    match_per_line: bool | None = Query(None, description="Return matches per line."),
-    max_results: int | None = Query(None, description="Maximum number of results."),
+    case_insensitive: bool | None = Query(None, description="Perform case-insensitive matching."),
+    include: str | None = Query(None, description="Glob patterns to filter files (e.g. '*.py'). Files must match at least one pattern."),
+    match_per_line: bool | None = Query(None, description="If true, return each matching line with line numbers. If false, return only the names of matching files."),
+    max_results: int | None = Query(None, description="Maximum number of matches to return."),
 ) -> Response:
-    """Search file contents. Pass 'query' and optional 'path', 'regex', 'include' query params."""
+    """Search for a text pattern across files in a directory. Returns structured matches with file paths, line numbers, and matching lines. Skips binary files."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/grep", request, terminal.api_key, pod_key=terminal.user_hash
@@ -437,13 +454,13 @@ async def proxy_files_grep(
 async def proxy_files_glob(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    pattern: str = Query(..., description="Glob pattern to match file names."),
-    path: str | None = Query(None, description="Directory to search in."),
-    exclude: str | None = Query(None, description="Glob pattern for files to exclude."),
-    type: str | None = Query(None, description="File type filter: 'file' or 'dir'."),
-    max_results: int | None = Query(None, description="Maximum number of results."),
+    pattern: str = Query(..., description="Glob pattern to search for (e.g. '*.py')."),
+    path: str | None = Query(None, description="Directory to search within. Defaults to current directory."),
+    exclude: str | None = Query(None, description="Glob patterns to exclude from search results."),
+    type: str | None = Query(None, description="Type filter: 'file', 'directory', or 'any'."),
+    max_results: int | None = Query(None, description="Maximum number of matches to return."),
 ) -> Response:
-    """Search files by name pattern. Pass 'pattern' and optional 'path', 'exclude', 'type' query params."""
+    """Search for files and subdirectories by name within a specified directory using glob patterns. Results will include the relative path, type, size, and modification time."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/glob", request, terminal.api_key, pod_key=terminal.user_hash
@@ -473,13 +490,36 @@ async def proxy_files(
     )
 
 
-@app.api_route("/execute", methods=["GET", "POST"])
-async def proxy_execute(
+@app.get("/execute", dependencies=[Depends(verify_api_key)])
+async def proxy_execute_list(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    _: str = Depends(verify_api_key),
 ) -> Response:
-    """Proxy command execution requests."""
+    """List running commands. Returns a list of all tracked background processes, including running, done, and killed."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/execute"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+
+
+@app.post("/execute", dependencies=[Depends(verify_api_key)])
+async def proxy_execute(
+    request: Request,
+    body: ExecRequest,
+    user_id: str = Depends(extract_user_id),
+    wait: float | None = Query(
+        None,
+        description="Seconds to wait for the command to finish before returning. If the command completes in time, output is included inline. Null to return immediately.",
+    ),
+    tail: int | None = Query(
+        None,
+        description="Return only the last N output entries. Useful to limit response size when only recent output matters.",
+    ),
+) -> Response:
+    """Execute a shell command. Run a command in the background and return a command ID. This gives you full Linux shell access: you can run any command including file operations (rm, cp, mv, mkdir, cat, grep, find, etc.), install packages, run scripts, and chain commands with &&, ||, ;, and pipes. Use this for operations not covered by dedicated file endpoints, such as deleting files (rm), moving/renaming (mv), or any other shell task."""
     terminal = await get_terminal_for_user(user_id)
 
     target_url = f"{terminal.endpoint}/execute"
@@ -497,7 +537,7 @@ async def proxy_execute_process(
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
-    """Proxy process-specific requests."""
+    """Manage a running command process. Use GET /execute/{process_id}/status to poll output and check if finished. Use POST /execute/{process_id}/input to send stdin. Use DELETE /execute/{process_id} to kill (SIGTERM, or force=true for SIGKILL)."""
     terminal = await get_terminal_for_user(user_id)
 
     target_url = f"{terminal.endpoint}/execute/{process_id}/{path}"
