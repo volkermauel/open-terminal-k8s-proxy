@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,21 +35,31 @@ request_counts: dict[str, list[float]] = defaultdict(list)
 
 
 class WriteFileRequest(BaseModel):
-    path: str = Field(description="Absolute or relative path to write to. Parent directories are created automatically.")
+    path: str = Field(
+        description="Absolute or relative path to write to. Parent directories are created automatically."
+    )
     content: str = Field(description="Text content to write to the file.")
 
 
 class ReplacementChunk(BaseModel):
-    target: str = Field(description="Exact string to find. Must match precisely, including whitespace.")
+    target: str = Field(
+        description="Exact string to find. Must match precisely, including whitespace."
+    )
     replacement: str = Field(description="Content to replace the target with.")
-    start_line: int | None = Field(None, description="Narrow the search to lines at or after this (1-indexed).")
-    end_line: int | None = Field(None, description="Narrow the search to lines at or before this (1-indexed).")
+    start_line: int | None = Field(
+        None, description="Narrow the search to lines at or after this (1-indexed)."
+    )
+    end_line: int | None = Field(
+        None, description="Narrow the search to lines at or before this (1-indexed)."
+    )
     allow_multiple: bool = Field(False, description="If true, replaces all occurrences.")
 
 
 class ReplaceFileRequest(BaseModel):
     path: str = Field(description="Path to the file to modify.")
-    replacements: list[ReplacementChunk] = Field(description="List of find-and-replace operations to apply sequentially.")
+    replacements: list[ReplacementChunk] = Field(
+        description="List of find-and-replace operations to apply sequentially."
+    )
 
 
 def get_or_create_proxy_api_key() -> str:
@@ -353,7 +363,9 @@ async def proxy_files_read(
     request: Request,
     user_id: str = Depends(extract_user_id),
     path: str = Query(..., description="Path to the file to read."),
-    start_line: int | None = Query(None, description="First line to return (1-indexed, inclusive)."),
+    start_line: int | None = Query(
+        None, description="First line to return (1-indexed, inclusive)."
+    ),
     end_line: int | None = Query(None, description="Last line to return (1-indexed, inclusive)."),
 ) -> Response:
     """Read a file. Pass 'path' query param for the file to read."""
@@ -380,7 +392,7 @@ async def proxy_files_display(
 async def proxy_files_write(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    body: WriteFileRequest = None,
+    body: Optional[WriteFileRequest] = None,
 ) -> Response:
     """Write content to a file. Body must include 'path' and 'content'."""
     terminal = await get_terminal_for_user(user_id)
@@ -393,7 +405,7 @@ async def proxy_files_write(
 async def proxy_files_replace(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    body: ReplaceFileRequest = None,
+    body: Optional[ReplaceFileRequest] = None,
 ) -> Response:
     """Replace content in a file. Body must include 'path' and 'replacements' list."""
     terminal = await get_terminal_for_user(user_id)
