@@ -37,6 +37,8 @@ storage:
     size: 5Gi
   shared:
     size: 100Gi
+  emptyDir:
+    size: 5Gi
 
 maxConcurrentPods: 100
 podIdleTimeoutSeconds: 3600

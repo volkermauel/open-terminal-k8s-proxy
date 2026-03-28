@@ -124,3 +124,28 @@ def test_get_shared_pvc_node_fetches(storage_manager, mock_k8s_client):
 
     assert result == "node-2"
     mock_k8s_client.get_shared_pvc_node.assert_called_once()
+
+def test_create_user_pvc_emptydir_mode(storage_manager, mock_k8s_client):
+    storage_manager.cfg.storage_mode = StorageMode.EMPTYDIR
+
+    result = storage_manager.create_user_pvc("pvc-test", "user123")
+
+    assert result is False
+    mock_k8s_client.create_pvc.assert_not_called()
+
+
+def test_delete_user_pvc_emptydir_mode(storage_manager, mock_k8s_client):
+    storage_manager.cfg.storage_mode = StorageMode.EMPTYDIR
+
+    storage_manager.delete_user_pvc("pvc-test")
+
+    mock_k8s_client.delete_pvc.assert_not_called()
+
+
+def test_ensure_shared_pvc_emptydir_mode(storage_manager, mock_k8s_client):
+    storage_manager.cfg.storage_mode = StorageMode.EMPTYDIR
+
+    result = storage_manager.ensure_shared_pvc()
+
+    assert result is None
+    mock_k8s_client.get_pvc.assert_not_called()

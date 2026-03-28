@@ -41,3 +41,9 @@ def test_cors_origins_parsing():
     with patch.dict(os.environ, {"CORS_ALLOWED_ORIGINS": "http://localhost,http://example.com"}):
         settings = Settings()
         assert settings.cors_origins == ["http://localhost", "http://example.com"]
+
+def test_settings_emptydir_mode():
+    with patch.dict(os.environ, {"STORAGE_MODE": "emptyDir"}):
+        settings = Settings()
+        assert settings.storage_mode == StorageMode.EMPTYDIR
+        assert settings.storage_emptydir_size_limit == "5Gi"
