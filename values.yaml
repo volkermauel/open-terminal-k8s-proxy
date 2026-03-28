@@ -30,6 +30,9 @@ terminalResources:
     cpu: 1000m
     memory: 4Gi
 
+terminalNodeSelector: {}
+terminalTolerations: []
+
 storage:
   mode: perUser
   className: ""

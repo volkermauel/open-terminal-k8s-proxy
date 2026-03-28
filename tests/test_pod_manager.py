@@ -140,3 +140,42 @@ async def test_get_or_create_emptydir_no_pvc(mock_k8s_client, mock_storage_manag
     pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
     volumes = pod_manifest["spec"]["volumes"]
     assert any("emptyDir" in v and v["emptyDir"].get("sizeLimit") == "5Gi" for v in volumes)
+    assert any(
+        "emptyDir" in v and v["emptyDir"].get("sizeLimit") == "5Gi"
+        for v in volumes
+    )
+
+@pytest.mark.asyncio
+async def test_terminal_pod_gets_tolerations(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.EMPTYDIR,
+        terminal_tolerations=[{"key": "foo", "value": "bar", "effect": "baz"}],
+        terminal_node_selector={"kubernetes.io/hostname": "foobar"},
+    )
+    pm = PodManager(cfg)
+
+    await pm.get_or_create("tol-user")
+
+    pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
+    assert pod_manifest["spec"]["tolerations"] == [
+        {"key": "foo", "value": "bar", "effect": "baz"}
+    ]
+    assert pod_manifest["spec"]["nodeSelector"] == {"kubernetes.io/hostname": "foobar"}
+
+
+@pytest.mark.asyncio
+async def test_terminal_pod_no_tolerations_by_default(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.EMPTYDIR,
+    )
+    pm = PodManager(cfg)
+
+    await pm.get_or_create("notol-user")
+
+    pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
+    assert "tolerations" not in pod_manifest["spec"]
+    assert "nodeSelector" not in pod_manifest["spec"]
