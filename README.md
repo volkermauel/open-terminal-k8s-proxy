@@ -110,6 +110,7 @@ Per terminal pod:
 | PR | Title | Author | Date |
 |----|-------|--------|------|
 | #1 | Add support for emptyDir storage mode | [@ymarcus93](https://github.com/ymarcus93) | 2026-03-28 |
+| #2 | Add terminal pod scheduling (nodeSelector+tolerations) | [@ymarcus93](https://github.com/ymarcus93) | 2026-03-28 |
 
 ## License
 

@@ -11,10 +11,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 
 from terminal_proxy import __version__
 from terminal_proxy.config import settings
@@ -31,6 +32,24 @@ bearer_scheme = HTTPBearer(auto_error=False)
 REQUESTS_PER_MINUTE = 300
 REQUEST_BODY_MAX_SIZE = 100 * 1024 * 1024
 request_counts: dict[str, list[float]] = defaultdict(list)
+
+
+class WriteFileRequest(BaseModel):
+    path: str = Field(description="Absolute or relative path to write to. Parent directories are created automatically.")
+    content: str = Field(description="Text content to write to the file.")
+
+
+class ReplacementChunk(BaseModel):
+    target: str = Field(description="Exact string to find. Must match precisely, including whitespace.")
+    replacement: str = Field(description="Content to replace the target with.")
+    start_line: int | None = Field(None, description="Narrow the search to lines at or after this (1-indexed).")
+    end_line: int | None = Field(None, description="Narrow the search to lines at or before this (1-indexed).")
+    allow_multiple: bool = Field(False, description="If true, replaces all occurrences.")
+
+
+class ReplaceFileRequest(BaseModel):
+    path: str = Field(description="Path to the file to modify.")
+    replacements: list[ReplacementChunk] = Field(description="List of find-and-replace operations to apply sequentially.")
 
 
 def get_or_create_proxy_api_key() -> str:
@@ -320,6 +339,7 @@ PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 async def proxy_files_list(
     request: Request,
     user_id: str = Depends(extract_user_id),
+    directory: str | None = Query(None, description="Directory path to list."),
 ) -> Response:
     """List directory contents. Pass 'directory' query param for the path to list."""
     terminal = await get_terminal_for_user(user_id)
@@ -332,6 +352,9 @@ async def proxy_files_list(
 async def proxy_files_read(
     request: Request,
     user_id: str = Depends(extract_user_id),
+    path: str = Query(..., description="Path to the file to read."),
+    start_line: int | None = Query(None, description="First line to return (1-indexed, inclusive)."),
+    end_line: int | None = Query(None, description="Last line to return (1-indexed, inclusive)."),
 ) -> Response:
     """Read a file. Pass 'path' query param for the file to read."""
     terminal = await get_terminal_for_user(user_id)
@@ -344,6 +367,7 @@ async def proxy_files_read(
 async def proxy_files_display(
     request: Request,
     user_id: str = Depends(extract_user_id),
+    path: str = Query(..., description="Path to the file to display."),
 ) -> Response:
     """Display a file to the user. Pass 'path' query param for the file to display."""
     terminal = await get_terminal_for_user(user_id)
@@ -356,6 +380,7 @@ async def proxy_files_display(
 async def proxy_files_write(
     request: Request,
     user_id: str = Depends(extract_user_id),
+    body: WriteFileRequest = None,
 ) -> Response:
     """Write content to a file. Body must include 'path' and 'content'."""
     terminal = await get_terminal_for_user(user_id)
@@ -368,8 +393,9 @@ async def proxy_files_write(
 async def proxy_files_replace(
     request: Request,
     user_id: str = Depends(extract_user_id),
+    body: ReplaceFileRequest = None,
 ) -> Response:
-    """Replace content in a file. Body must include 'path', 'old_content', 'new_content'."""
+    """Replace content in a file. Body must include 'path' and 'replacements' list."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/replace", request, terminal.api_key, pod_key=terminal.user_hash
@@ -380,6 +406,13 @@ async def proxy_files_replace(
 async def proxy_files_grep(
     request: Request,
     user_id: str = Depends(extract_user_id),
+    query: str = Query(..., description="Search query string."),
+    path: str | None = Query(None, description="Directory or file path to search in."),
+    regex: bool | None = Query(None, description="Treat query as a regex pattern."),
+    case_insensitive: bool | None = Query(None, description="Case-insensitive search."),
+    include: str | None = Query(None, description="Glob pattern for files to include."),
+    match_per_line: bool | None = Query(None, description="Return matches per line."),
+    max_results: int | None = Query(None, description="Maximum number of results."),
 ) -> Response:
     """Search file contents. Pass 'query' and optional 'path', 'regex', 'include' query params."""
     terminal = await get_terminal_for_user(user_id)
@@ -392,6 +425,11 @@ async def proxy_files_grep(
 async def proxy_files_glob(
     request: Request,
     user_id: str = Depends(extract_user_id),
+    pattern: str = Query(..., description="Glob pattern to match file names."),
+    path: str | None = Query(None, description="Directory to search in."),
+    exclude: str | None = Query(None, description="Glob pattern for files to exclude."),
+    type: str | None = Query(None, description="File type filter: 'file' or 'dir'."),
+    max_results: int | None = Query(None, description="Maximum number of results."),
 ) -> Response:
     """Search files by name pattern. Pass 'pattern' and optional 'path', 'exclude', 'type' query params."""
     terminal = await get_terminal_for_user(user_id)
