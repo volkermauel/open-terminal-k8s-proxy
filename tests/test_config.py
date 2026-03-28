@@ -42,6 +42,7 @@ def test_cors_origins_parsing():
         settings = Settings()
         assert settings.cors_origins == ["http://localhost", "http://example.com"]
 
+
 def test_settings_emptydir_mode():
     with patch.dict(os.environ, {"STORAGE_MODE": "emptyDir"}):
         settings = Settings()

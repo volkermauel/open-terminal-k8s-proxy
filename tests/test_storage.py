@@ -125,6 +125,7 @@ def test_get_shared_pvc_node_fetches(storage_manager, mock_k8s_client):
     assert result == "node-2"
     mock_k8s_client.get_shared_pvc_node.assert_called_once()
 
+
 def test_create_user_pvc_emptydir_mode(storage_manager, mock_k8s_client):
     storage_manager.cfg.storage_mode = StorageMode.EMPTYDIR
 
