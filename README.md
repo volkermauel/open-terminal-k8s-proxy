@@ -105,6 +105,12 @@ Per terminal pod:
 - Memory: 512Mi request / 4Gi limit
 - Storage: 5Gi PVC (perUser mode)
 
+## Attributions
+
+| PR | Title | Author | Date |
+|----|-------|--------|------|
+| #1 | Add support for emptyDir storage mode | [@ymarcus93](https://github.com/ymarcus93) | 2026-03-28 |
+
 ## License
 
 MIT
