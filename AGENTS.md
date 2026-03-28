@@ -1,4 +1,8 @@
 # Agent Instructions
+Always run linting and tests after finishing changes:
+
+- **Linting**: `ruff check .` and `mypy terminal_proxy`
+- **Tests**: `pytest tests -v --tb=short`
 
 ## Pre-commit Checks
 
