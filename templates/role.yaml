@@ -1,3 +1,4 @@
+{{- if .Values.rbac.create }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -7,8 +8,12 @@ metadata:
     app.kubernetes.io/managed-by: Helm
 rules:
   - apiGroups: [""]
-    resources: ["pods", "persistentvolumeclaims", "services", "secrets"]
+    resources: ["pods", "services", "secrets"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
   - apiGroups: [""]
     resources: ["pods/status"]
     verbs: ["get"]
+{{- end }}
