@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Any
+from typing import Any, cast
 
 from terminal_proxy.config import Settings, StorageMode
 from terminal_proxy.models import TerminalPod
@@ -79,7 +79,6 @@ def build_pod_manifest(
     node_name: str | None = None,
     node_selector: dict[str, Any] | None = None,
     secret_name: str | None = None,
-    emptydir_size_limit: str | None = None,
 ) -> dict[str, Any]:
     """Build a Kubernetes Pod manifest for a terminal instance."""
     labels = {
@@ -118,19 +117,6 @@ def build_pod_manifest(
         if shared_sub_path:
             mount["subPath"] = shared_sub_path
         volume_mounts.append(mount)
-    elif emptydir_size_limit:
-       volumes.append(
-           {
-               "name": "user-data",
-               "emptyDir": {"sizeLimit": emptydir_size_limit},
-           }
-       )
-       volume_mounts.append(
-           {
-               "name": "user-data",
-               "mountPath": "/data",
-           }
-       )
 
     env_var: dict[str, Any]
     if secret_name:
@@ -164,6 +150,17 @@ def build_pod_manifest(
         },
         "volumeMounts": volume_mounts,
     }
+
+    if cfg.terminal_ephemeral_storage_request:
+        resources = cast(dict[str, Any], container["resources"])
+        resources["requests"]["ephemeral-storage"] = (
+            cfg.terminal_ephemeral_storage_request
+        )
+    if cfg.terminal_ephemeral_storage_limit:
+        resources = cast(dict[str, Any], container["resources"])
+        resources["limits"]["ephemeral-storage"] = (
+            cfg.terminal_ephemeral_storage_limit
+        )
 
     spec: dict[str, Any] = {
         "containers": [container],
@@ -270,8 +267,8 @@ def build_pod_for_user(
         shared_sub_path = terminal_pod.user_hash
         if shared_pvc_node:
             node_name = shared_pvc_node
-    elif cfg.storage_mode == StorageMode.EMPTYDIR:
-       pass  # no PVC needed; emptydir_size_limit passed to build_pod_manifest
+    elif cfg.storage_mode == StorageMode.NONE:
+        pass  # no PVC, no volume — ephemeral-storage limits protect the node
 
     secret_manifest = build_secret_manifest(
         secret_name=terminal_pod.secret_name,
@@ -288,8 +285,6 @@ def build_pod_for_user(
         node_name=node_name,
         node_selector=cfg.terminal_node_selector or None,
         secret_name=terminal_pod.secret_name,
-        emptydir_size_limit=cfg.storage_emptydir_size_limit
-            if cfg.storage_mode == StorageMode.EMPTYDIR else None,
     )
 
     service_manifest = build_service_manifest(terminal_pod, cfg)

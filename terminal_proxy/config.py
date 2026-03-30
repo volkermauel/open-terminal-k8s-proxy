@@ -11,10 +11,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class StorageMode(str, Enum):
     """Storage mode for persistent volumes."""
 
+    NONE = "none"
     PER_USER = "perUser"
     SHARED = "shared"
     SHARED_RWO = "sharedRWO"
-    EMPTYDIR = "emptyDir"
 
 
 class Settings(BaseSettings):
@@ -49,6 +49,17 @@ class Settings(BaseSettings):
         default="512Mi", description="Memory request for terminal pods."
     )
     terminal_memory_limit: str = Field(default="4Gi", description="Memory limit for terminal pods.")
+    terminal_ephemeral_storage_request: str = Field(
+        default="5Gi",
+        description="Ephemeral storage request for terminal pods. "
+        "Controls scheduling. Set to empty string to disable.",
+    )
+    terminal_ephemeral_storage_limit: str = Field(
+        default="5Gi",
+        description="Ephemeral storage limit for terminal pods. "
+        "Kubelet evicts the pod if total writable usage exceeds this. "
+        "Set to empty string to disable.",
+    )
 
     terminal_service_port: int = Field(
         default=8000,
@@ -63,8 +74,8 @@ class Settings(BaseSettings):
     )
 
     storage_mode: StorageMode = Field(
-        default=StorageMode.PER_USER,
-        description="Storage mode: perUser, shared (RWX), or sharedRWO (RWO with node affinity).",
+        default=StorageMode.NONE,
+        description="Storage mode: none (no PVC), perUser, shared (RWX), or sharedRWO (RWO with node affinity).",
     )
     storage_class_name: str = Field(
         default="",
@@ -75,9 +86,6 @@ class Settings(BaseSettings):
     )
     storage_shared_size: str = Field(
         default="100Gi", description="Shared PVC size (shared/sharedRWO mode)."
-    )
-    storage_emptydir_size_limit: str = Field(
-        default="5Gi", description="sizeLimit for emptyDir volume (emptyDir mode)."
     )
 
     max_concurrent_pods: int = Field(

@@ -47,6 +47,10 @@ spec:
               value: {{ .Values.terminalResources.requests.memory }}
             - name: TERMINAL_MEMORY_LIMIT
               value: {{ .Values.terminalResources.limits.memory }}
+            - name: TERMINAL_EPHEMERAL_STORAGE_REQUEST
+              value: {{ index .Values.terminalResources.requests "ephemeral-storage" | default "" | quote }}
+            - name: TERMINAL_EPHEMERAL_STORAGE_LIMIT
+              value: {{ index .Values.terminalResources.limits "ephemeral-storage" | default "" | quote }}
             - name: TERMINAL_NODE_SELECTOR
               value: {{ .Values.terminalNodeSelector | toJson | quote }}
             - name: TERMINAL_TOLERATIONS
@@ -59,8 +63,6 @@ spec:
               value: {{ .Values.storage.perUser.size }}
             - name: STORAGE_SHARED_SIZE
               value: {{ .Values.storage.shared.size }}
-            - name: STORAGE_EMPTYDIR_SIZE_LIMIT
-              value: {{ .Values.storage.emptyDir.size | default "5Gi" }}
             - name: MAX_CONCURRENT_PODS
               value: "{{ .Values.maxConcurrentPods }}"
             - name: POD_IDLE_TIMEOUT_SECONDS
