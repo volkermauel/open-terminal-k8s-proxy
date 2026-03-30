@@ -78,15 +78,20 @@ These are orthogonal. When `storage.mode: none`, ephemeral-storage limits are th
    - All writes go to the container's writable layer
    - Protected by `ephemeral-storage` limits (kubelet-enforced)
    - Data destroyed when pod terminates
-2. **perUser**: Each user gets their own PVC
-   - Best isolation
-   - Works with any StorageClass
-3. **shared**: Single PVC with ReadWriteMany access
-   - Requires RWX-capable storage (NFS, CephFS)
-   - Single volume for all users
-4. **sharedRWO**: Single PVC with ReadWriteOnce + node affinity
-   - Works with standard RWO storage
-   - All terminal pods scheduled to same node
+ 2. **perUser**: Each user gets their own PVC
+    - Best isolation
+    - Works with any StorageClass
+    - Volume ownership set to gid 1000 via `fsGroup`
+ 3. **shared**: Single PVC with ReadWriteMany access
+    - Requires RWX-capable storage (NFS, CephFS)
+    - Single volume for all users
+    - Volume ownership set to gid 1000 via `fsGroup`
+ 4. **sharedRWO**: Single PVC with ReadWriteOnce + node affinity
+    - Works with standard RWO storage
+    - All terminal pods scheduled to same node
+    - Volume ownership set to gid 1000 via `fsGroup`
+
+When a PVC is mounted, the pod `securityContext` is set with `fsGroup: 1000` and `fsGroupChangePolicy: "Always"`, ensuring the mounted volume contents are owned by gid 1000 on every pod start.
 
 ## Integration with Open WebUI
 
