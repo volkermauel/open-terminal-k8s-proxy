@@ -122,7 +122,7 @@ class PodManager:
 
             terminal = TerminalPod.create(user_id, self._generate_api_key())
             # Skip PVC creation
-            if self.cfg.storage_mode == StorageMode.EMPTYDIR:
+            if self.cfg.storage_mode == StorageMode.NONE:
                 terminal.pvc_name = None
 
             await self._create_pod_resources(terminal)

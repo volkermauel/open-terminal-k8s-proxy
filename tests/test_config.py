@@ -12,9 +12,11 @@ def test_settings_defaults():
     assert settings.proxy_host == "0.0.0.0"
     assert settings.proxy_port == 8000
     assert settings.namespace == "default"
-    assert settings.storage_mode == StorageMode.PER_USER
+    assert settings.storage_mode == StorageMode.NONE
     assert settings.max_concurrent_pods == 100
     assert settings.pod_idle_timeout_seconds == 3600
+    assert settings.terminal_ephemeral_storage_request == "5Gi"
+    assert settings.terminal_ephemeral_storage_limit == "5Gi"
 
 
 def test_settings_from_env():
@@ -43,8 +45,7 @@ def test_cors_origins_parsing():
         assert settings.cors_origins == ["http://localhost", "http://example.com"]
 
 
-def test_settings_emptydir_mode():
-    with patch.dict(os.environ, {"STORAGE_MODE": "emptyDir"}):
+def test_settings_none_mode():
+    with patch.dict(os.environ, {"STORAGE_MODE": "none"}):
         settings = Settings()
-        assert settings.storage_mode == StorageMode.EMPTYDIR
-        assert settings.storage_emptydir_size_limit == "5Gi"
+        assert settings.storage_mode == StorageMode.NONE
