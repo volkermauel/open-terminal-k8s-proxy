@@ -38,6 +38,8 @@ terminalTolerations: []
 storage:
   mode: none
   className: ""
+  retainPvc: false
+  pvcRetentionTtlSeconds: 0
   perUser:
     size: 5Gi
   shared:

@@ -13,6 +13,8 @@ def test_settings_defaults():
     assert settings.proxy_port == 8000
     assert settings.namespace == "default"
     assert settings.storage_mode == StorageMode.NONE
+    assert settings.storage_retain_pvc is False
+    assert settings.storage_pvc_retention_ttl_seconds == 0
     assert settings.max_concurrent_pods == 100
     assert settings.pod_idle_timeout_seconds == 3600
     assert settings.terminal_ephemeral_storage_request == "5Gi"
@@ -49,3 +51,18 @@ def test_settings_none_mode():
     with patch.dict(os.environ, {"STORAGE_MODE": "none"}):
         settings = Settings()
         assert settings.storage_mode == StorageMode.NONE
+
+
+def test_settings_retain_pvc_from_env():
+    with patch.dict(os.environ, {"STORAGE_RETAIN_PVC": "true"}):
+        settings = Settings()
+        assert settings.storage_retain_pvc is True
+
+
+def test_settings_pvc_retention_ttl_from_env():
+    with patch.dict(
+        os.environ,
+        {"STORAGE_RETAIN_PVC": "true", "STORAGE_PVC_RETENTION_TTL_SECONDS": "2592000"},
+    ):
+        settings = Settings()
+        assert settings.storage_pvc_retention_ttl_seconds == 2592000

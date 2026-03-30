@@ -15,12 +15,16 @@ SHARED_PVC_NAME = "terminal-shared-storage"
 API_KEY_SECRET_KEY = "api-key"
 
 
+LAST_ACTIVE_ANNOTATION = "terminal-proxy/last-active"
+
+
 def build_pvc_manifest(
     pvc_name: str,
     size: str,
     storage_class_name: str,
     access_mode: str = "ReadWriteOnce",
     labels: dict[str, Any] | None = None,
+    annotations: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a Kubernetes PersistentVolumeClaim manifest."""
     spec: dict[str, Any] = {
@@ -35,13 +39,17 @@ def build_pvc_manifest(
     if storage_class_name:
         spec["storageClassName"] = storage_class_name
 
+    metadata: dict[str, Any] = {
+        "name": pvc_name,
+        "labels": labels or {},
+    }
+    if annotations:
+        metadata["annotations"] = annotations
+
     manifest: dict[str, Any] = {
         "apiVersion": "v1",
         "kind": "PersistentVolumeClaim",
-        "metadata": {
-            "name": pvc_name,
-            "labels": labels or {},
-        },
+        "metadata": metadata,
         "spec": spec,
     }
 
@@ -118,6 +126,8 @@ def build_pod_manifest(
             mount["subPath"] = shared_sub_path
         volume_mounts.append(mount)
 
+    env: list[dict[str, Any]] = []
+
     env_var: dict[str, Any]
     if secret_name:
         env_var = {
@@ -132,12 +142,17 @@ def build_pod_manifest(
     else:
         env_var = {"name": "OPEN_TERMINAL_API_KEY", "value": terminal_pod.api_key}
 
+    env.append(env_var)
+
+    if volume_mounts:
+        env.append({"name": "HOME", "value": "/data"})
+
     container = {
         "name": "terminal",
         "image": cfg.terminal_image,
         "imagePullPolicy": cfg.terminal_image_pull_policy,
         "ports": [{"containerPort": cfg.terminal_service_port}],
-        "env": [env_var],
+        "env": env,
         "resources": {
             "requests": {
                 "cpu": cfg.terminal_cpu_request,
@@ -153,14 +168,10 @@ def build_pod_manifest(
 
     if cfg.terminal_ephemeral_storage_request:
         resources = cast(dict[str, Any], container["resources"])
-        resources["requests"]["ephemeral-storage"] = (
-            cfg.terminal_ephemeral_storage_request
-        )
+        resources["requests"]["ephemeral-storage"] = cfg.terminal_ephemeral_storage_request
     if cfg.terminal_ephemeral_storage_limit:
         resources = cast(dict[str, Any], container["resources"])
-        resources["limits"]["ephemeral-storage"] = (
-            cfg.terminal_ephemeral_storage_limit
-        )
+        resources["limits"]["ephemeral-storage"] = cfg.terminal_ephemeral_storage_limit
 
     spec: dict[str, Any] = {
         "containers": [container],

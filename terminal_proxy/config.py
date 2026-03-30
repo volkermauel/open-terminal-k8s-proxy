@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     storage_shared_size: str = Field(
         default="100Gi", description="Shared PVC size (shared/sharedRWO mode)."
     )
+    storage_retain_pvc: bool = Field(
+        default=False,
+        description="Retain per-user PVCs after pod deletion. "
+        "When true, PVCs outlive their pods and are reused on reconnection.",
+    )
+    storage_pvc_retention_ttl_seconds: int = Field(
+        default=0,
+        description="Max seconds to retain an unused per-user PVC after its pod is deleted. "
+        "0 means retain forever. Only effective when storage_retain_pvc is true.",
+    )
 
     max_concurrent_pods: int = Field(
         default=100,

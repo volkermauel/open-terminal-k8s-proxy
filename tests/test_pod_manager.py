@@ -41,6 +41,7 @@ def mock_storage_manager():
     with patch("terminal_proxy.pod_manager.storage_manager") as mock:
         mock.create_user_pvc.return_value = True
         mock.delete_user_pvc.return_value = None
+        mock.touch_pvc.return_value = None
         yield mock
 
 
@@ -63,7 +64,7 @@ async def test_start_reconciles_existing_pods(pod_manager, mock_k8s_client):
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_returns_existing(pod_manager):
+async def test_get_or_create_returns_existing(pod_manager, mock_storage_manager):
     existing = TerminalPod.create("user-123", "api-key")
     existing.state = PodState.RUNNING
     existing.pod_ip = "10.0.0.1"
@@ -72,6 +73,7 @@ async def test_get_or_create_returns_existing(pod_manager):
     result = await pod_manager.get_or_create("user-123")
 
     assert result == existing
+    mock_storage_manager.touch_pvc.assert_called_once_with(existing.pvc_name)
 
 
 @pytest.mark.asyncio
@@ -141,6 +143,7 @@ async def test_get_or_create_none_mode_no_pvc(mock_k8s_client, mock_storage_mana
     volumes = pod_manifest["spec"]["volumes"]
     assert volumes == []
 
+
 @pytest.mark.asyncio
 async def test_terminal_pod_gets_tolerations(mock_k8s_client, mock_storage_manager):
     cfg = Settings(
@@ -155,9 +158,7 @@ async def test_terminal_pod_gets_tolerations(mock_k8s_client, mock_storage_manag
     await pm.get_or_create("tol-user")
 
     pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
-    assert pod_manifest["spec"]["tolerations"] == [
-        {"key": "foo", "value": "bar", "effect": "baz"}
-    ]
+    assert pod_manifest["spec"]["tolerations"] == [{"key": "foo", "value": "bar", "effect": "baz"}]
     assert pod_manifest["spec"]["nodeSelector"] == {"kubernetes.io/hostname": "foobar"}
 
 
@@ -237,3 +238,120 @@ async def test_ephemeral_storage_with_pvc_mode(mock_k8s_client, mock_storage_man
     # AND ephemeral-storage limits should also be present
     assert container["resources"]["requests"]["ephemeral-storage"] == "3Gi"
     assert container["resources"]["limits"]["ephemeral-storage"] == "6Gi"
+
+
+@pytest.mark.asyncio
+async def test_delete_pod_retains_pvc_when_configured(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.PER_USER,
+        storage_retain_pvc=True,
+    )
+    pm = PodManager(cfg)
+    terminal = TerminalPod.create("retain-user", "key")
+    terminal.state = PodState.RUNNING
+    pm._pods[terminal.user_hash] = terminal
+
+    await pm._delete_pod(terminal.user_hash)
+
+    mock_storage_manager.delete_user_pvc.assert_not_called()
+    mock_storage_manager.touch_pvc.assert_called_once_with(terminal.pvc_name)
+    mock_k8s_client.delete_pod.assert_called_once()
+    mock_k8s_client.delete_service.assert_called_once()
+    mock_k8s_client.delete_secret.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_pod_deletes_pvc_when_not_retained(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.PER_USER,
+        storage_retain_pvc=False,
+    )
+    pm = PodManager(cfg)
+    terminal = TerminalPod.create("delete-user", "key")
+    terminal.state = PodState.RUNNING
+    pm._pods[terminal.user_hash] = terminal
+
+    await pm._delete_pod(terminal.user_hash)
+
+    mock_storage_manager.delete_user_pvc.assert_called_once_with(terminal.pvc_name)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_idle_pods_retains_pvc(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.PER_USER,
+        pod_idle_timeout_seconds=300,
+        storage_retain_pvc=True,
+    )
+    pm = PodManager(cfg)
+    old_pod = TerminalPod.create("idle-user", "key")
+    old_pod.last_active_at = datetime.utcnow() - timedelta(seconds=400)
+    pm._pods[old_pod.user_hash] = old_pod
+
+    await pm._cleanup_idle_pods()
+
+    assert old_pod.user_hash not in pm._pods
+    mock_k8s_client.delete_pod.assert_called_once()
+    mock_storage_manager.delete_user_pvc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_retains_pvc_on_recycle(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.PER_USER,
+        storage_retain_pvc=True,
+    )
+    pm = PodManager(cfg)
+    failed = TerminalPod.create("recycle-user", "old-key")
+    failed.state = PodState.FAILED
+    pm._pods[failed.user_hash] = failed
+
+    result = await pm.get_or_create("recycle-user")
+
+    mock_storage_manager.delete_user_pvc.assert_not_called()
+    mock_storage_manager.touch_pvc.assert_called_with(failed.pvc_name)
+    assert result.pvc_name is not None
+    mock_k8s_client.create_pod.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_home_env_set_when_pvc_mounted(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.PER_USER,
+    )
+    pm = PodManager(cfg)
+
+    await pm.get_or_create("home-pvc-user")
+
+    pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
+    env = pod_manifest["spec"]["containers"][0]["env"]
+    env_names = {e["name"] for e in env}
+    assert "HOME" in env_names
+    assert next(e for e in env if e["name"] == "HOME")["value"] == "/data"
+
+
+@pytest.mark.asyncio
+async def test_home_env_not_set_without_pvc(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.NONE,
+    )
+    pm = PodManager(cfg)
+
+    await pm.get_or_create("no-home-user")
+
+    pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
+    env = pod_manifest["spec"]["containers"][0]["env"]
+    env_names = {e["name"] for e in env}
+    assert "HOME" not in env_names
