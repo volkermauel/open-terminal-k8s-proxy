@@ -179,6 +179,12 @@ def build_pod_manifest(
         "restartPolicy": "Never",
     }
 
+    if volume_mounts:
+        spec["securityContext"] = {
+            "fsGroup": 1000,
+            "fsGroupChangePolicy": "Always",
+        }
+
     if node_name:
         spec["nodeName"] = node_name
     if node_selector:

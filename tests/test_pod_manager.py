@@ -355,3 +355,35 @@ async def test_home_env_not_set_without_pvc(mock_k8s_client, mock_storage_manage
     env = pod_manifest["spec"]["containers"][0]["env"]
     env_names = {e["name"] for e in env}
     assert "HOME" not in env_names
+
+
+@pytest.mark.asyncio
+async def test_security_context_set_when_pvc_mounted(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.PER_USER,
+    )
+    pm = PodManager(cfg)
+
+    await pm.get_or_create("fsgroup-pvc-user")
+
+    pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
+    sec_ctx = pod_manifest["spec"]["securityContext"]
+    assert sec_ctx["fsGroup"] == 1000
+    assert sec_ctx["fsGroupChangePolicy"] == "Always"
+
+
+@pytest.mark.asyncio
+async def test_security_context_not_set_without_pvc(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(
+        proxy_api_key="test-key",
+        namespace="test-ns",
+        storage_mode=StorageMode.NONE,
+    )
+    pm = PodManager(cfg)
+
+    await pm.get_or_create("no-fsgroup-user")
+
+    pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
+    assert "securityContext" not in pod_manifest["spec"]
