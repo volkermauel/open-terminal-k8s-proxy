@@ -63,6 +63,10 @@ spec:
               value: {{ .Values.storage.perUser.size }}
             - name: STORAGE_SHARED_SIZE
               value: {{ .Values.storage.shared.size }}
+            - name: STORAGE_RETAIN_PVC
+              value: {{ .Values.storage.retainPvc | default false | quote }}
+            - name: STORAGE_PVC_RETENTION_TTL_SECONDS
+              value: "{{ .Values.storage.pvcRetentionTtlSeconds | default 0 }}"
             - name: MAX_CONCURRENT_PODS
               value: "{{ .Values.maxConcurrentPods }}"
             - name: POD_IDLE_TIMEOUT_SECONDS

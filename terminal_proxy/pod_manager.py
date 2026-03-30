@@ -29,12 +29,14 @@ class PodManager:
         self._lock = asyncio.Lock()
         self._cleanup_task: asyncio.Task[None] | None = None
         self._health_check_task: asyncio.Task[None] | None = None
+        self._pvc_cleanup_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Start the pod manager and cleanup tasks."""
         await self._reconcile_existing_pods()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._health_check_task = asyncio.create_task(self._health_check_loop())
+        self._pvc_cleanup_task = asyncio.create_task(self._pvc_cleanup_loop())
         logger.info("Pod manager started")
 
     async def stop(self) -> None:
@@ -47,6 +49,10 @@ class PodManager:
             self._health_check_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._health_check_task
+        if self._pvc_cleanup_task:
+            self._pvc_cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._pvc_cleanup_task
         logger.info("Pod manager stopped")
 
     async def _reconcile_existing_pods(self) -> None:
@@ -109,11 +115,16 @@ class PodManager:
 
             if terminal and terminal.state == PodState.RUNNING:
                 terminal.last_active_at = datetime.utcnow()
+                if terminal.pvc_name:
+                    storage_manager.touch_pvc(terminal.pvc_name)
                 return terminal
 
             if terminal:
                 if terminal.pvc_name:
-                    storage_manager.delete_user_pvc(terminal.pvc_name)
+                    if not self.cfg.storage_retain_pvc:
+                        storage_manager.delete_user_pvc(terminal.pvc_name)
+                    else:
+                        storage_manager.touch_pvc(terminal.pvc_name)
                 k8s_client.delete_pod(terminal.pod_name)
                 del self._pods[user_hash]
 
@@ -218,10 +229,16 @@ class PodManager:
             logger.warning(f"Failed to delete secret {terminal.secret_name}: {e}")
 
         if terminal.pvc_name and self.cfg.storage_mode == StorageMode.PER_USER:
-            try:
-                storage_manager.delete_user_pvc(terminal.pvc_name)
-            except Exception as e:
-                logger.warning(f"Failed to delete PVC {terminal.pvc_name}: {e}")
+            if self.cfg.storage_retain_pvc:
+                try:
+                    storage_manager.touch_pvc(terminal.pvc_name)
+                except Exception as e:
+                    logger.warning(f"Failed to touch PVC {terminal.pvc_name}: {e}")
+            else:
+                try:
+                    storage_manager.delete_user_pvc(terminal.pvc_name)
+                except Exception as e:
+                    logger.warning(f"Failed to delete PVC {terminal.pvc_name}: {e}")
 
     async def _cleanup_loop(self) -> None:
         while True:
@@ -279,6 +296,16 @@ class PodManager:
             if terminal_to_fail:
                 terminal_to_fail.state = PodState.FAILED
             await self._delete_pod(user_hash)
+
+    async def _pvc_cleanup_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self.cfg.pod_cleanup_interval_seconds)
+                storage_manager.cleanup_expired_pvcs(set(self._pods.keys()))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"PVC cleanup loop error: {e}")
 
     def get_stats(self) -> dict[str, Any]:
         """Get statistics about active pods."""

@@ -6,7 +6,13 @@ import logging
 from typing import Any, cast
 
 from kubernetes import client, config
-from kubernetes.client import V1PersistentVolumeClaim, V1Pod, V1PodList, V1Secret
+from kubernetes.client import (
+    V1PersistentVolumeClaim,
+    V1PersistentVolumeClaimList,
+    V1Pod,
+    V1PodList,
+    V1Secret,
+)
 from kubernetes.client.rest import ApiException
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -154,6 +160,30 @@ class K8sClient:
         except ApiException as e:
             if e.status != 404:
                 raise
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
+    def list_user_pvcs(self) -> V1PersistentVolumeClaimList:
+        """List all per-user PVCs managed by this proxy."""
+        return self.core_v1.list_namespaced_persistent_volume_claim(
+            self.namespace,
+            label_selector=f"app={settings.labels_app},managed-by={settings.labels_managed_by},type=user",
+        )
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        reraise=True,
+    )
+    def annotate_pvc(self, pvc_name: str, annotations: dict[str, str]) -> None:
+        """Patch annotations on a PVC."""
+        body = {"metadata": {"annotations": annotations}}
+        self.core_v1.patch_namespaced_persistent_volume_claim(pvc_name, self.namespace, body)
 
     @retry(
         stop=stop_after_attempt(3),
