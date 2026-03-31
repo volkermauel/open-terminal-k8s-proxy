@@ -12,5 +12,5 @@ roleRef:
   name: {{ include "name" . }}
 subjects:
   - kind: ServiceAccount
-     name: {{ .Values.serviceAccount.name | default (include "name" .) }}
+    name: {{ .Values.serviceAccount.name | default (include "name" .) }}
 {{- end }}
