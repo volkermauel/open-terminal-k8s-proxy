@@ -38,7 +38,9 @@ class WriteFileRequest(BaseModel):
     path: str = Field(
         description="Absolute or relative path to write to. Parent directories are created automatically."
     )
-    content: str = Field(description="Text content to write to the file. Overwrites if the file already exists.")
+    content: str = Field(
+        description="Text content to write to the file. Overwrites if the file already exists."
+    )
 
 
 class ReplacementChunk(BaseModel):
@@ -318,6 +320,7 @@ async def get_config() -> dict[str, dict[str, bool]]:
         "features": {
             "terminal": True,
             "notebooks": True,
+            "desktop": True,
         },
     }
 
@@ -364,7 +367,9 @@ PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 async def proxy_files_list(
     request: Request,
     user_id: str = Depends(extract_user_id),
-    directory: str | None = Query(None, description="Directory path to list. Defaults to current directory."),
+    directory: str | None = Query(
+        None, description="Directory path to list. Defaults to current directory."
+    ),
 ) -> Response:
     """Return a structured listing of files and directories at the given path."""
     terminal = await get_terminal_for_user(user_id)
@@ -379,10 +384,12 @@ async def proxy_files_read(
     user_id: str = Depends(extract_user_id),
     path: str = Query(..., description="Path to the file to read."),
     start_line: int | None = Query(
-        None, description="First line to return (1-indexed, inclusive). Defaults to the beginning of the file."
+        None,
+        description="First line to return (1-indexed, inclusive). Defaults to the beginning of the file.",
     ),
     end_line: int | None = Query(
-        None, description="Last line to return (1-indexed, inclusive). Defaults to the end of the file."
+        None,
+        description="Last line to return (1-indexed, inclusive). Defaults to the end of the file.",
     ),
 ) -> Response:
     """Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). For text files you can optionally request a specific line range. Images are returned as binary so you can view and analyze them directly. Use display to show a file to the user."""
@@ -436,11 +443,19 @@ async def proxy_files_grep(
     request: Request,
     user_id: str = Depends(extract_user_id),
     query: str = Query(..., description="Text or regex pattern to search for."),
-    path: str | None = Query(None, description="Directory or file to search in. Defaults to current directory."),
+    path: str | None = Query(
+        None, description="Directory or file to search in. Defaults to current directory."
+    ),
     regex: bool | None = Query(None, description="Treat query as a regex pattern."),
     case_insensitive: bool | None = Query(None, description="Perform case-insensitive matching."),
-    include: str | None = Query(None, description="Glob patterns to filter files (e.g. '*.py'). Files must match at least one pattern."),
-    match_per_line: bool | None = Query(None, description="If true, return each matching line with line numbers. If false, return only the names of matching files."),
+    include: str | None = Query(
+        None,
+        description="Glob patterns to filter files (e.g. '*.py'). Files must match at least one pattern.",
+    ),
+    match_per_line: bool | None = Query(
+        None,
+        description="If true, return each matching line with line numbers. If false, return only the names of matching files.",
+    ),
     max_results: int | None = Query(None, description="Maximum number of matches to return."),
 ) -> Response:
     """Search for a text pattern across files in a directory. Returns structured matches with file paths, line numbers, and matching lines. Skips binary files."""
@@ -455,7 +470,9 @@ async def proxy_files_glob(
     request: Request,
     user_id: str = Depends(extract_user_id),
     pattern: str = Query(..., description="Glob pattern to search for (e.g. '*.py')."),
-    path: str | None = Query(None, description="Directory to search within. Defaults to current directory."),
+    path: str | None = Query(
+        None, description="Directory to search within. Defaults to current directory."
+    ),
     exclude: str | None = Query(None, description="Glob patterns to exclude from search results."),
     type: str | None = Query(None, description="Type filter: 'file', 'directory', or 'any'."),
     max_results: int | None = Query(None, description="Maximum number of matches to return."),
@@ -649,6 +666,227 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
         client_ws=client_ws,
         terminal=terminal,
         path=f"/api/terminals/{session_id}",
+    )
+
+
+@app.get(
+    "/desktop",
+    operation_id="desktop_status",
+    summary="Get desktop status",
+    description="Returns the current state of the virtual desktop: whether it is running, the display dimensions, and the VNC/noVNC ports.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_status(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post(
+    "/desktop/start",
+    operation_id="desktop_start",
+    summary="Start the virtual desktop",
+    description="Start Xvfb, x11vnc, noVNC, and a window manager. Idempotent — returns immediately if already running.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_start(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop/start", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post(
+    "/desktop/stop",
+    operation_id="desktop_stop",
+    summary="Stop the virtual desktop",
+    description="Terminate all desktop processes (Xvfb, x11vnc, noVNC, window manager).",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_stop(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop/stop", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post(
+    "/desktop/screenshot",
+    operation_id="desktop_screenshot",
+    summary="Capture a screenshot",
+    description="Capture a PNG screenshot of the virtual display. Returns base64-encoded JSON by default, or raw binary PNG when Accept: image/png is set or ?format=raw is passed.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_screenshot(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+    format: str | None = Query(
+        None,
+        description="Set to 'raw' for binary PNG response. Default is base64 JSON.",
+    ),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    target_url = f"{terminal.endpoint}/desktop/screenshot"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+    return await http_proxy.proxy_request(
+        target_url, request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post(
+    "/desktop/click",
+    operation_id="desktop_click",
+    summary="Mouse click",
+    description="Move the mouse to (x, y) and click. Button 1 = left, 2 = middle, 3 = right.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_click(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop/click", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post(
+    "/desktop/mouse_move",
+    operation_id="desktop_mouse_move",
+    summary="Move the mouse",
+    description="Move the mouse cursor to the specified coordinates without clicking.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_mouse_move(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop/mouse_move",
+        request,
+        terminal.api_key,
+        pod_key=terminal.user_hash,
+    )
+
+
+@app.post(
+    "/desktop/drag",
+    operation_id="desktop_drag",
+    summary="Drag (mouse down, move, mouse up)",
+    description="Press and hold a mouse button at (start_x, start_y), drag to (end_x, end_y), then release.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_drag(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop/drag", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post(
+    "/desktop/type",
+    operation_id="desktop_type",
+    summary="Type text",
+    description="Type text into the currently focused window, as if entered on a keyboard.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_type(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop/type", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post(
+    "/desktop/key",
+    operation_id="desktop_key",
+    summary="Press a key or key combination",
+    description='Press a key or key combination. Examples: "Return", "Escape", "ctrl+c", "alt+F4", "super".',
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_key(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop/key", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.post(
+    "/desktop/scroll",
+    operation_id="desktop_scroll",
+    summary="Scroll at a position",
+    description="Move to (x, y) and scroll up or down by the given amount.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_desktop_scroll(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/desktop/scroll", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
+@app.websocket("/desktop/vnc")
+async def websocket_desktop_vnc(client_ws: WebSocket) -> None:
+    """WebSocket endpoint for noVNC (websockify) proxy to the virtual desktop."""
+    import json
+
+    await client_ws.accept()
+
+    if PROXY_API_KEY:
+        try:
+            raw = await asyncio.wait_for(client_ws.receive_text(), timeout=10.0)
+            payload = json.loads(raw)
+            if payload.get("type") != "auth" or payload.get("token") != PROXY_API_KEY:
+                await client_ws.close(code=1008, reason="Policy Violation: Invalid API key")
+                return
+        except (TimeoutError, json.JSONDecodeError, Exception):
+            await client_ws.close(
+                code=1008, reason="Policy Violation: Auth timeout or invalid payload"
+            )
+            return
+
+    user_id = client_ws.query_params.get("user_id")
+    if not user_id:
+        await client_ws.close(code=1008, reason="Policy Violation: user_id query param required")
+        return
+
+    try:
+        terminal = await get_terminal_for_user(user_id)
+    except K8sUnavailableError as e:
+        await client_ws.close(code=1011, reason=f"Internal Error: {e}")
+        return
+    except HTTPException as e:
+        await client_ws.close(code=1011, reason=f"Internal Error: {e.detail}")
+        return
+
+    await ws_proxy.proxy_websocket(
+        client_ws=client_ws,
+        terminal=terminal,
+        path="/desktop/vnc",
     )
 
 
