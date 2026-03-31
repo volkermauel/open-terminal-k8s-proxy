@@ -148,7 +148,9 @@ def test_openapi_file_post_body_params(client):
     required = _get_required_body_fields(spec, paths["/files/replace"]["post"])
     assert required == {"path", "replacements"}
 
-    body_props = paths["/files/replace"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    body_props = paths["/files/replace"]["post"]["requestBody"]["content"]["application/json"][
+        "schema"
+    ]
     resolved = _resolve_schema_ref(spec, body_props)
     if resolved:
         body_props = resolved
@@ -165,12 +167,63 @@ def test_openapi_file_post_body_params(client):
         assert chunk_schema.get("required", []) == ["target", "replacement"]
 
 
+def test_openapi_exposes_desktop_routes(client):
+    spec = _get_openapi(client)
+    paths = spec["paths"]
+
+    for route in [
+        "/desktop",
+        "/desktop/start",
+        "/desktop/stop",
+        "/desktop/screenshot",
+        "/desktop/click",
+        "/desktop/mouse_move",
+        "/desktop/drag",
+        "/desktop/type",
+        "/desktop/key",
+        "/desktop/scroll",
+    ]:
+        assert route in paths, f"Missing desktop route: {route}"
+
+
+def test_desktop_routes_require_auth(client):
+    routes = [
+        ("/desktop", "get"),
+        ("/desktop/start", "post"),
+        ("/desktop/stop", "post"),
+        ("/desktop/screenshot", "post"),
+        ("/desktop/click", "post"),
+        ("/desktop/mouse_move", "post"),
+        ("/desktop/drag", "post"),
+        ("/desktop/type", "post"),
+        ("/desktop/key", "post"),
+        ("/desktop/scroll", "post"),
+    ]
+    for path, method in routes:
+        response = getattr(client, method)(path)
+        assert response.status_code == 401, f"{method.upper()} {path} should require auth"
+
+
+def test_desktop_routes_require_user_id(client):
+    from terminal_proxy.main import PROXY_API_KEY
+
+    response = client.get(
+        "/desktop",
+        headers={"Authorization": f"Bearer {PROXY_API_KEY}"},
+    )
+    assert response.status_code == 400
+
+
 def test_openapi_catch_all_files_route_hidden(client):
     spec = _get_openapi(client)
     paths = spec["paths"]
     catch_all = [
-        p for p in paths
-        if p.startswith("/files/") and "{" not in p and p not in (
+        p
+        for p in paths
+        if p.startswith("/files/")
+        and "{" not in p
+        and p
+        not in (
             "/files/list",
             "/files/read",
             "/files/write",
@@ -182,6 +235,5 @@ def test_openapi_catch_all_files_route_hidden(client):
         )
     ]
     assert len(catch_all) == 0, (
-        "Catch-all /files/{path} should be hidden from schema. "
-        f"Found: {catch_all}"
+        f"Catch-all /files/{{path}} should be hidden from schema. Found: {catch_all}"
     )
