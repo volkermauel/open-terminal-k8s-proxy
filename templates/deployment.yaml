@@ -28,9 +28,10 @@ spec:
             - name: http
               containerPort: 8000
               protocol: TCP
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secret.existingSecret | default (include "name" .) }}
           env:
-            - name: PROXY_API_KEY
-              value: {{ .Values.proxyApiKey | quote }}
             - name: NAMESPACE
               valueFrom:
                 fieldRef:

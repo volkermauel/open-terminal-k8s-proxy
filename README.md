@@ -32,14 +32,16 @@ Each user gets:
 helm install open-terminal-k8s-proxy ./open-terminal-k8s-proxy \
   --namespace terminals \
   --create-namespace \
-  --set proxyApiKey=your-secret-key
+  --set secret.data.PROXY_API_KEY=your-secret-key
 ```
 
 ### Configuration
 
 | Parameter                                          | Default                            | Description                                                     |
 |----------------------------------------------------|------------------------------------|---------------------------------------------------------------- |
-| `proxyApiKey`                                      | (auto-generated)                   | API key for Open WebUI → Proxy                                  |
+| `secret.create`                                    | `true`                             | Create Secret with `secret.data` values                         |
+| `secret.existingSecret`                            | `""`                               | Reference to external Secret (disables `create`)                |
+| `secret.data.PROXY_API_KEY`                        | `""`                               | API key for Open WebUI → Proxy                                  |
 | `terminalImage.repository`                         | `ghcr.io/open-webui/open-terminal` | Terminal container image                                        |
 | `terminalImage.tag`                                | `latest`                           | Terminal image tag                                              |
 | `storage.mode`                                     | `none`                             | Storage mode: `none`, `perUser`, `shared`, or `sharedRWO`       |
@@ -99,7 +101,11 @@ Add this proxy as an "Open Terminal" integration in Open WebUI admin settings:
 
 - Name: `K8s Terminal Proxy`
 - URL: `http://open-terminal-k8s-proxy.terminals.svc.cluster.local:8000`
-- API Key: (the value you set in `proxyApiKey`)
+- API Key: (the value you set in `secret.data.PROXY_API_KEY`)
+
+## Using External Secrets
+
+Instead of managing secrets in `values.yaml`, you can reference an existing Kubernetes Secret by setting `secret.existingSecret`. When using an external Secret, it must contain a `PROXY_API_KEY` key with the API key value.
 
 ## API Endpoints
 
