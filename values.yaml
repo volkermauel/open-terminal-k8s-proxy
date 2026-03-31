@@ -50,7 +50,11 @@ podIdleTimeoutSeconds: 3600
 podStartupTimeoutSeconds: 60
 podCleanupIntervalSeconds: 60
 
-proxyApiKey: ""
+secret:
+  create: true
+  existingSecret: ""
+  data:
+    PROXY_API_KEY: ""
 
 serviceAccount:
   create: true
