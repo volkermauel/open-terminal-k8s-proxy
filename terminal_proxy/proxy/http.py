@@ -129,6 +129,7 @@ class HttpProxy:
             content=response.content,
             status_code=response.status_code,
             headers=response_headers,
+            media_type=content_type.split(";")[0] if content_type else "application/json",
         )
 
 

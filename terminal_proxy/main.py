@@ -45,16 +45,22 @@ class WriteFileRequest(BaseModel):
 
 class ReplacementChunk(BaseModel):
     target: str = Field(
-        description="Exact string to find. Must match precisely, including whitespace."
+        ...,
+        description="Exact string to find. Must match precisely, including whitespace.",
     )
-    replacement: str = Field(description="Content to replace the target with.")
+    replacement: str = Field(
+        ...,
+        description="Content to replace the target with.",
+    )
     start_line: int | None = Field(
-        None, description="Narrow the search to lines at or after this (1-indexed)."
+        None, description="Narrow the search to lines at or after this (1-indexed).", ge=1
     )
     end_line: int | None = Field(
-        None, description="Narrow the search to lines at or before this (1-indexed)."
+        None, description="Narrow the search to lines at or before this (1-indexed).", ge=1
     )
-    allow_multiple: bool = Field(False, description="If true, replaces all occurrences.")
+    allow_multiple: bool = Field(
+        False, description="If true, replaces all occurrences. If false, errors when multiple matches are found."
+    )
 
 
 class ReplaceFileRequest(BaseModel):
@@ -76,6 +82,13 @@ class ExecRequest(BaseModel):
     env: dict[str, str] | None = Field(
         None,
         description="Extra environment variables merged into the subprocess environment.",
+    )
+
+
+class InputRequest(BaseModel):
+    input: str = Field(
+        ...,
+        description="Text to send to the process's stdin. Include newline characters as needed.",
     )
 
 
@@ -392,7 +405,7 @@ async def proxy_files_read(
         description="Last line to return (1-indexed, inclusive). Defaults to the end of the file.",
     ),
 ) -> Response:
-    """Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). For text files you can optionally request a specific line range. Images are returned as binary so you can view and analyze them directly. Use display to show a file to the user."""
+    """Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). For text files you can optionally request a specific line range. Images are returned as binary so you can view and analyze them directly. Use display_file to show a file to the user."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/read", request, terminal.api_key, pod_key=terminal.user_hash
@@ -405,7 +418,7 @@ async def proxy_files_display(
     user_id: str = Depends(extract_user_id),
     path: str = Query(..., description="Path to the file to display."),
 ) -> Response:
-    """Open a file in the user's file viewer so they can see it. Use this when the user wants to view or look at a file. This does not return file content to you — use read if you need to read the content yourself."""
+    """Open a file in the user's file viewer so they can see it. Use this when the user wants to view or look at a file. This does not return file content to you — use read_file if you need to read the content yourself."""
     terminal = await get_terminal_for_user(user_id)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/display", request, terminal.api_key, pod_key=terminal.user_hash
@@ -484,6 +497,26 @@ async def proxy_files_glob(
     )
 
 
+@app.get(
+    "/files/view",
+    dependencies=[Depends(verify_api_key)],
+    responses={
+        404: {"description": "File not found."},
+        401: {"description": "Invalid or missing API key."},
+    },
+)
+async def proxy_files_view(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+    path: str = Query(..., description="Path to the file to view."),
+) -> Response:
+    """Return raw file bytes with the appropriate Content-Type for UI previewing. Unlike read_file which is designed for LLM consumption, this endpoint serves any file as-is."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(
+        f"{terminal.endpoint}/files/view", request, terminal.api_key, pod_key=terminal.user_hash
+    )
+
+
 @app.api_route(
     "/files/{path:path}",
     methods=PROXY_METHODS,
@@ -546,15 +579,90 @@ async def proxy_execute(
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
 
 
-@app.api_route("/execute/{process_id}/{path:path}", methods=PROXY_METHODS)
-async def proxy_execute_process(
+@app.get(
+    "/execute/{process_id}/status",
+    dependencies=[Depends(verify_api_key)],
+    responses={
+        404: {"description": "Process not found."},
+        401: {"description": "Invalid or missing API key."},
+    },
+)
+async def proxy_execute_status(
+    process_id: str,
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Returns new output since the last poll, process status, and exit code. Output is drained on read to keep memory bounded."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/execute/{process_id}/status"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+
+
+@app.post(
+    "/execute/{process_id}/input",
+    dependencies=[Depends(verify_api_key)],
+    responses={
+        404: {"description": "Process not found."},
+        400: {"description": "Process has already exited or stdin is closed."},
+        401: {"description": "Invalid or missing API key."},
+    },
+)
+async def proxy_execute_input(
+    process_id: str,
+    request: Request,
+    body: InputRequest,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Write text to the process's stdin. For interactive processes (REPLs like Python, node, ruby, or shells like bash/zsh), you MUST include the literal escape sequence \\n at the end to execute commands. Example: send 'print("hello")\\n' (the string contains backslash-n, not an actual newline character). The backend will convert \\n to an actual newline. Without \\n, commands will be echoed but not executed."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/execute/{process_id}/input"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+
+
+@app.delete(
+    "/execute/{process_id}",
+    dependencies=[Depends(verify_api_key)],
+    responses={
+        404: {"description": "Process not found."},
+        401: {"description": "Invalid or missing API key."},
+    },
+)
+async def proxy_execute_kill(
+    process_id: str,
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Terminate the process. Sends SIGTERM by default for graceful shutdown. Use force=true to send SIGKILL."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/execute/{process_id}"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+
+
+@app.api_route(
+    "/execute/{process_id}/{path:path}",
+    methods=PROXY_METHODS,
+    include_in_schema=False,
+)
+async def proxy_execute_process_catch_all(
     process_id: str,
     path: str,
     request: Request,
     user_id: str = Depends(extract_user_id),
     _: str = Depends(verify_api_key),
 ) -> Response:
-    """Manage a running command process. Use GET /execute/{process_id}/status to poll output and check if finished. Use POST /execute/{process_id}/input to send stdin. Use DELETE /execute/{process_id} to kill (SIGTERM, or force=true for SIGKILL)."""
+    """Catch-all for execute process endpoints not explicitly defined."""
     terminal = await get_terminal_for_user(user_id)
 
     target_url = f"{terminal.endpoint}/execute/{process_id}/{path}"
