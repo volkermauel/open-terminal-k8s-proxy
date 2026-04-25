@@ -35,6 +35,28 @@ terminalResources:
 terminalNodeSelector: {}
 terminalTolerations: []
 
+terminalNetworkPolicy:
+  enabled: false
+  # Egress modes for terminal pods:
+  # - denyAll: no outbound network access
+  # - allowNetworks: outbound access only to allowedCIDRs, which defaults to non-internet ranges
+  mode: denyAll
+  allowedCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+    - 169.254.0.0/16
+  dns:
+    # Enable for access to DNS
+    enabled: false
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    podSelector:
+      k8s-app: kube-dns
+    ports:
+      - 53
+
 storage:
   mode: none
   className: ""
