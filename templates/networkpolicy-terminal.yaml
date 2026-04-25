@@ -1,0 +1,52 @@
+{{- if .Values.terminalNetworkPolicy.enabled }}
+{{- $mode := .Values.terminalNetworkPolicy.mode | default "denyAll" }}
+{{- if not (has $mode (list "denyAll" "allowNetworks")) }}
+{{- fail "terminalNetworkPolicy.mode must be one of: denyAll, allowNetworks" }}
+{{- end }}
+{{- if and (eq $mode "allowNetworks") (empty .Values.terminalNetworkPolicy.allowedCIDRs) }}
+{{- fail "terminalNetworkPolicy.allowedCIDRs must contain at least one CIDR when mode is allowNetworks" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "name" . }}-terminal-access
+  labels:
+    app.kubernetes.io/name: {{ include "name" . }}
+    app.kubernetes.io/managed-by: Helm
+spec:
+  podSelector:
+    matchLabels:
+      app: open-terminal-user
+      managed-by: terminal-proxy
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "name" . }}
+      ports:
+        - protocol: TCP
+          port: 8000
+  {{- $egressRules := list }}
+  {{- if eq $mode "allowNetworks" }}
+  {{- range .Values.terminalNetworkPolicy.allowedCIDRs }}
+  {{- $egressRules = append $egressRules (dict "to" (list (dict "ipBlock" (dict "cidr" .)))) }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.terminalNetworkPolicy.dns.enabled }}
+  {{- $dnsPorts := list }}
+  {{- range .Values.terminalNetworkPolicy.dns.ports }}
+  {{- $dnsPorts = append $dnsPorts (dict "protocol" "UDP" "port" .) }}
+  {{- $dnsPorts = append $dnsPorts (dict "protocol" "TCP" "port" .) }}
+  {{- end }}
+  {{- $egressRules = append $egressRules (dict "to" (list (dict "namespaceSelector" (dict "matchLabels" .Values.terminalNetworkPolicy.dns.namespaceSelector) "podSelector" (dict "matchLabels" .Values.terminalNetworkPolicy.dns.podSelector))) "ports" $dnsPorts) }}
+  {{- end }}
+  {{- if $egressRules }}
+  egress:
+    {{- toYaml $egressRules | nindent 4 }}
+  {{- else }}
+  egress: []
+  {{- end }}
+{{- end }}

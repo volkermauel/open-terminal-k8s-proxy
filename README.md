@@ -57,6 +57,65 @@ helm install open-terminal-k8s-proxy ./open-terminal-k8s-proxy \
 | `terminalResources.limits.memory`                  | `4Gi`                              | Memory limit per terminal pod                                   |
 | `terminalNodeSelector`                             | `{}`                               | nodeSelector for terminal pods                                  |
 | `terminalTolerations`                              | `[]`                               | Tolerations for terminal pods                                   |
+| `terminalNetworkPolicy.enabled`                    | `false`                            | Create Kubernetes NetworkPolicy resources for terminal pods     |
+| `terminalNetworkPolicy.mode`                       | `denyAll`                          | Terminal pod egress mode: `denyAll` or `allowNetworks`          |
+| `terminalNetworkPolicy.allowedCIDRs`               | RFC1918, CGNAT, link-local         | CIDRs allowed when `mode` is `allowNetworks`                    |
+| `terminalNetworkPolicy.dns.enabled`                | `false`                            | Also allow terminal pods to reach the configured DNS pods       |
+
+### Terminal Network Policies
+
+When `terminalNetworkPolicy.enabled` is true, the chart creates a Kubernetes
+`NetworkPolicy` selecting dynamically created terminal pods with:
+
+```yaml
+app: open-terminal-user
+managed-by: terminal-proxy
+```
+
+The policy always isolates ingress for terminal pods. By default, only the proxy
+pod is allowed to connect to terminal pods on port `8000`, so Open WebUI traffic
+can still flow through the proxy.
+
+**No network at all** for terminal pod egress:
+
+```yaml
+terminalNetworkPolicy:
+  enabled: true
+  mode: denyAll
+```
+
+**Specific or configurable networks only**:
+
+```yaml
+terminalNetworkPolicy:
+  enabled: true
+  mode: allowNetworks
+  allowedCIDRs:
+    - 10.20.0.0/16
+    - 192.168.50.0/24
+```
+
+**No internet but private/internal networks allowed** uses the same
+`allowNetworks` mode with the default non-internet CIDRs:
+
+```yaml
+terminalNetworkPolicy:
+  enabled: true
+  mode: allowNetworks
+  allowedCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+    - 169.254.0.0/16
+```
+
+Kubernetes `NetworkPolicy` is allow-list based. If your cluster pod CIDR,
+service CIDR, VPC CIDR, or on-prem ranges are outside the defaults, add them to
+`allowedCIDRs`. DNS egress is off by default; enable
+`terminalNetworkPolicy.dns.enabled` only when terminals need name resolution and
+adjust the selectors if your DNS pods are not labeled as `k8s-app: kube-dns` in
+the `kube-system` namespace.
 
 ### Understanding Storage
 
