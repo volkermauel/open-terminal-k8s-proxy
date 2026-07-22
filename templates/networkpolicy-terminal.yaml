@@ -16,8 +16,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: open-terminal-user
-      managed-by: terminal-proxy
+      {{- toYaml .Values.terminalNetworkPolicy.podLabels | nindent 6 }}
   policyTypes:
     - Ingress
     - Egress

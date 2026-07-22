@@ -39,8 +39,15 @@ terminalNetworkPolicy:
   enabled: false
   # Egress modes for terminal pods:
   # - denyAll: no outbound network access
-  # - allowNetworks: outbound access only to allowedCIDRs, which defaults to non-internet ranges
+  # - allowNetworks: outbound access only to allowedCIDRs (defaults to non-internet ranges)
   mode: denyAll
+  # Labels used to select terminal pods. These MUST match the proxy's LABELS_APP
+  # and LABELS_MANAGED_BY settings (defaults: open-terminal-user / terminal-proxy).
+  # If you customize those env vars on the proxy, update podLabels accordingly
+  # or the policy will not select any pods.
+  podLabels:
+    app: open-terminal-user
+    managed-by: terminal-proxy
   allowedCIDRs:
     - 10.0.0.0/8
     - 172.16.0.0/12
