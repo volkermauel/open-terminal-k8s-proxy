@@ -63,11 +63,13 @@ helm install open-terminal-k8s-proxy ./open-terminal-k8s-proxy \
 Terminal pods have two independent storage controls:
 
 **1. PVC** (`storage.mode`) — optional persistent volume mounted at `/data`:
+
 - `none` (default): no PVC, no mounted volume. Users write to the container filesystem.
 - `perUser`: dedicated PVC per user, survives pod restarts
 - `shared` / `sharedRWO`: shared PVC across users
 
 **2. Ephemeral storage limits** (`terminalResources.*.ephemeral-storage`) — limits **total writable space** on the container:
+
 - Container writable layer (`/tmp`, `/home`, `/var`, etc.)
 - Container logs
 - Enforced by kubelet — pod is evicted if the limit is exceeded
@@ -80,15 +82,15 @@ These are orthogonal. When `storage.mode: none`, ephemeral-storage limits are th
    - All writes go to the container's writable layer
    - Protected by `ephemeral-storage` limits (kubelet-enforced)
    - Data destroyed when pod terminates
- 2. **perUser**: Each user gets their own PVC
+2. **perUser**: Each user gets their own PVC
     - Best isolation
     - Works with any StorageClass
     - Volume ownership set to gid 1000 via `fsGroup`
- 3. **shared**: Single PVC with ReadWriteMany access
+3. **shared**: Single PVC with ReadWriteMany access
     - Requires RWX-capable storage (NFS, CephFS)
     - Single volume for all users
     - Volume ownership set to gid 1000 via `fsGroup`
- 4. **sharedRWO**: Single PVC with ReadWriteOnce + node affinity
+4. **sharedRWO**: Single PVC with ReadWriteOnce + node affinity
     - Works with standard RWO storage
     - All terminal pods scheduled to same node
     - Volume ownership set to gid 1000 via `fsGroup`
@@ -117,11 +119,13 @@ The proxy implements the same API as open-terminal:
 - `POST /files/replace` - Replace content in file
 - `GET /files/grep` - Search file contents
 - `GET /files/glob` - Search files by pattern
+- `GET /info` - Operator-provided environment info
 - `POST /execute` - Run command
 - `GET /execute/{id}/status` - Get command status
 - `POST /execute/{id}/input` - Send input to command
 - `DELETE /execute/{id}` - Kill command
 - WebSocket: `/api/terminals/{session_id}` - Interactive terminal session
+- All other open-terminal endpoints (`/files/mkdir`, `/files/move`, `/files/delete`, `/files/upload`, `/files/archive`, `/notebooks/*`, `/system`) are forwarded transparently but hidden from the OpenAPI schema.
 
 ## Resource Requirements
 

@@ -335,6 +335,31 @@ async def get_status() -> dict[str, Any]:
 
 
 @app.get(
+    "/system",
+    summary="Get LLM system prompt",
+    description="Return the system prompt for LLM integration (if enabled on the terminal pod).",
+    include_in_schema=False,
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_system(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
+    """Return the terminal pod's LLM system prompt (if enabled)."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(f"{terminal.endpoint}/system", request, terminal.api_key)
+
+
+@app.get(
+    "/info",
+    summary="Get environment info",
+    description="Return operator-provided information about this environment. Use this to understand the system you are working with.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_info(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
+    """Return operator-provided environment info from the terminal pod."""
+    terminal = await get_terminal_for_user(user_id)
+    return await http_proxy.proxy_request(f"{terminal.endpoint}/info", request, terminal.api_key)
+
+
+@app.get(
     "/files/cwd",
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
@@ -546,7 +571,74 @@ async def proxy_execute(
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
 
 
-@app.api_route("/execute/{process_id}/{path:path}", methods=PROXY_METHODS)
+@app.get(
+    "/execute/{process_id}/status",
+    summary="Get command status and output",
+    description="Returns new output since the last poll, process status, and exit code. Output is drained on read to keep memory bounded.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_process_status(
+    process_id: str,
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Poll a running command for new output and status."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/execute/{process_id}/status"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+
+
+@app.post(
+    "/execute/{process_id}/input",
+    summary="Send input to a running command",
+    description="Write text to the process's stdin. Include newline characters as needed.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_process_input(
+    process_id: str,
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Send stdin input to a running command."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/execute/{process_id}/input"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+
+
+@app.delete(
+    "/execute/{process_id}",
+    summary="Kill a running command",
+    description="Terminate the process. Sends SIGTERM by default for graceful shutdown. Use force=true to send SIGKILL.",
+    dependencies=[Depends(verify_api_key)],
+)
+async def proxy_process_kill(
+    process_id: str,
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+) -> Response:
+    """Kill a running command (SIGTERM, or force=true for SIGKILL)."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/execute/{process_id}"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+
+
+@app.api_route(
+    "/execute/{process_id}/{path:path}",
+    methods=PROXY_METHODS,
+    include_in_schema=False,
+)
 async def proxy_execute_process(
     process_id: str,
     path: str,
@@ -667,6 +759,47 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
         terminal=terminal,
         path=f"/api/terminals/{session_id}",
     )
+
+
+@app.api_route(
+    "/notebooks",
+    methods=["POST"],
+    include_in_schema=False,
+)
+async def proxy_notebooks(
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+    _: str = Depends(verify_api_key),
+) -> Response:
+    """Proxy notebook session creation requests to the terminal pod."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/notebooks"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
+
+
+@app.api_route(
+    "/notebooks/{path:path}",
+    methods=PROXY_METHODS,
+    include_in_schema=False,
+)
+async def proxy_notebooks_session(
+    path: str,
+    request: Request,
+    user_id: str = Depends(extract_user_id),
+    _: str = Depends(verify_api_key),
+) -> Response:
+    """Proxy notebook session operations (execute, get, delete) to the terminal pod."""
+    terminal = await get_terminal_for_user(user_id)
+
+    target_url = f"{terminal.endpoint}/notebooks/{path}"
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+
+    return await http_proxy.proxy_request(target_url, request, terminal.api_key)
 
 
 # Virtual desktop endpoints are intentionally hidden from the OpenAPI schema
