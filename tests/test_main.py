@@ -215,6 +215,96 @@ def test_desktop_routes_require_user_id(client):
     assert response.status_code == 400
 
 
+def test_openapi_exposes_info_and_execute_process_routes(client):
+    spec = _get_openapi(client)
+    paths = spec["paths"]
+
+    exposed = [
+        "/info",
+        "/execute/{process_id}/status",
+        "/execute/{process_id}/input",
+        "/execute/{process_id}",
+    ]
+    for route in exposed:
+        assert route in paths, f"Missing exposed route: {route}"
+
+
+def test_openapi_hides_system_notebooks_and_execute_catchall(client):
+    spec = _get_openapi(client)
+    paths = spec["paths"]
+
+    hidden = [
+        "/system",
+        "/notebooks",
+        "/notebooks/{session_id}",
+        "/execute/{process_id}/{path:path}",
+    ]
+    for route in hidden:
+        assert route not in paths, f"Route should be hidden: {route}"
+
+
+def test_new_forwarder_routes_require_auth(client):
+    routes = [
+        ("/info", "get"),
+        ("/system", "get"),
+        ("/execute/abc/status", "get"),
+        ("/execute/abc/input", "post"),
+        ("/execute/abc", "delete"),
+        ("/notebooks", "post"),
+        ("/notebooks/abc", "get"),
+    ]
+    for path, method in routes:
+        response = getattr(client, method)(path, headers={"X-User-Id": "u1"})
+        assert response.status_code == 401, f"{method.upper()} {path} should require auth"
+
+
+def test_new_forwarder_routes_require_user_id(client):
+    from terminal_proxy.main import PROXY_API_KEY
+
+    headers = {"Authorization": f"Bearer {PROXY_API_KEY}"}
+    for path, method in [("/info", "get"), ("/execute/abc/status", "get"), ("/notebooks", "post")]:
+        response = getattr(client, method)(path, headers=headers)
+        assert response.status_code == 400, f"{method.upper()} {path} should require X-User-Id"
+
+
+def test_new_forwarder_routes_target_the_pod(client):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from fastapi import Response
+
+    from terminal_proxy.main import PROXY_API_KEY
+
+    terminal = SimpleNamespace(endpoint="http://pod.test:8000", api_key="pod-key", user_hash="h")
+    headers = {"Authorization": f"Bearer {PROXY_API_KEY}", "X-User-Id": "user-1"}
+    captured = []
+
+    async def fake_proxy(target_url, request, terminal_api_key, pod_key=None):
+        captured.append((target_url, terminal_api_key))
+        return Response(content=b'{"ok": 1}', media_type="application/json", status_code=200)
+
+    with patch("terminal_proxy.main.get_terminal_for_user", new=AsyncMock(return_value=terminal)), patch(
+        "terminal_proxy.main.http_proxy.proxy_request", new=fake_proxy
+    ):
+        assert client.get("/info", headers=headers).status_code == 200
+        assert client.get("/system", headers=headers).status_code == 200
+        assert client.get("/execute/abc/status?seq=5", headers=headers).status_code == 200
+        assert client.post("/execute/abc/input", json={"text": "hi"}, headers=headers).status_code == 200
+        assert client.delete("/execute/abc?force=true", headers=headers).status_code == 200
+        assert client.post("/notebooks", json={"kernel": "python3"}, headers=headers).status_code == 200
+        assert client.post("/notebooks/s1/execute", json={"code": "x"}, headers=headers).status_code == 200
+
+    targets = [url for url, _ in captured]
+    assert "http://pod.test:8000/info" in targets
+    assert "http://pod.test:8000/system" in targets
+    assert "http://pod.test:8000/execute/abc/status?seq=5" in targets
+    assert "http://pod.test:8000/execute/abc/input" in targets
+    assert "http://pod.test:8000/execute/abc?force=true" in targets
+    assert "http://pod.test:8000/notebooks" in targets
+    assert "http://pod.test:8000/notebooks/s1/execute" in targets
+    assert all(key == "pod-key" for _, key in captured)
+
+
 def test_openapi_catch_all_files_route_hidden(client):
     spec = _get_openapi(client)
     paths = spec["paths"]
