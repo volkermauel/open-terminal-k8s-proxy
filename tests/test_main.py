@@ -283,16 +283,26 @@ def test_new_forwarder_routes_target_the_pod(client):
         captured.append((target_url, terminal_api_key))
         return Response(content=b'{"ok": 1}', media_type="application/json", status_code=200)
 
-    with patch("terminal_proxy.main.get_terminal_for_user", new=AsyncMock(return_value=terminal)), patch(
-        "terminal_proxy.main.http_proxy.proxy_request", new=fake_proxy
+    with (
+        patch("terminal_proxy.main.get_terminal_for_user", new=AsyncMock(return_value=terminal)),
+        patch("terminal_proxy.main.http_proxy.proxy_request", new=fake_proxy),
     ):
         assert client.get("/info", headers=headers).status_code == 200
         assert client.get("/system", headers=headers).status_code == 200
         assert client.get("/execute/abc/status?seq=5", headers=headers).status_code == 200
-        assert client.post("/execute/abc/input", json={"text": "hi"}, headers=headers).status_code == 200
+        assert (
+            client.post("/execute/abc/input", json={"text": "hi"}, headers=headers).status_code
+            == 200
+        )
         assert client.delete("/execute/abc?force=true", headers=headers).status_code == 200
-        assert client.post("/notebooks", json={"kernel": "python3"}, headers=headers).status_code == 200
-        assert client.post("/notebooks/s1/execute", json={"code": "x"}, headers=headers).status_code == 200
+        assert (
+            client.post("/notebooks", json={"kernel": "python3"}, headers=headers).status_code
+            == 200
+        )
+        assert (
+            client.post("/notebooks/s1/execute", json={"code": "x"}, headers=headers).status_code
+            == 200
+        )
 
     targets = [url for url, _ in captured]
     assert "http://pod.test:8000/info" in targets
