@@ -1,6 +1,8 @@
 # Open Terminal K8s Proxy
 
-A Kubernetes orchestrator that dynamically provisions per-user `open-terminal` instances,## Overview
+A Kubernetes orchestrator that dynamically provisions per-user `open-terminal` instances.
+
+## Overview
 
 Open Terminal K8s Proxy acts as a reverse proxy and orchestrator that:
 
@@ -50,7 +52,7 @@ helm install open-terminal-k8s-proxy ./open-terminal-k8s-proxy \
 | `terminalResources.requests.ephemeral-storage`     | `5Gi`                              | Ephemeral storage request (scheduling)                          |
 | `terminalResources.limits.ephemeral-storage`       | `5Gi`                              | Ephemeral storage limit (kubelet evicts pod if exceeded)        |
 | `maxConcurrentPods`                                | `100`                              | Maximum concurrent terminal pods                                |
-| `podIdleTimeoutSeconds`                            | `300`                              | Idle timeout before pod termination                             |
+| `podIdleTimeoutSeconds`                            | `3600`                             | Idle timeout before pod termination                                    |
 | `terminalResources.requests.cpu`                   | `500m`                             | CPU request per terminal pod                                    |
 | `terminalResources.limits.cpu`                     | `1000m`                            | CPU limit per terminal pod                                      |
 | `terminalResources.requests.memory`                | `512Mi`                            | Memory request per terminal pod                                 |
@@ -71,6 +73,12 @@ When `terminalNetworkPolicy.enabled` is true, the chart creates a Kubernetes
 app: open-terminal-user
 managed-by: terminal-proxy
 ```
+
+The selector labels are configurable via `terminalNetworkPolicy.podLabels` and
+**must match** the proxy's `LABELS_APP` and `LABELS_MANAGED_BY` environment variables
+(the defaults above match the proxy defaults). If you customize those labels on the
+proxy, update `podLabels` accordingly — otherwise the policy selects no pods and
+provides no isolation.
 
 The policy always isolates ingress for terminal pods. By default, only the proxy
 pod is allowed to connect to terminal pods on port `8000`, so Open WebUI traffic
@@ -116,6 +124,18 @@ service CIDR, VPC CIDR, or on-prem ranges are outside the defaults, add them to
 `terminalNetworkPolicy.dns.enabled` only when terminals need name resolution and
 adjust the selectors if your DNS pods are not labeled as `k8s-app: kube-dns` in
 the `kube-system` namespace.
+
+**Caveats:**
+
+- **`denyAll` with DNS:** when `mode: denyAll` but `dns.enabled: true`, DNS egress
+  (UDP/TCP 53 to the configured DNS pods) remains allowed — i.e. "deny all except DNS".
+  Leave DNS disabled for a fully closed egress.
+- **IPv4 only by default:** the default `allowedCIDRs` are IPv4 ranges. IPv6-only or
+  dual-stack clusters must add their own IPv6 CIDRs.
+- **Policies are additive:** Kubernetes `NetworkPolicy` is additive across policies in
+  the same namespace. If other policies also select these terminal pods, they can widen
+  the allowed traffic; this policy only fully denies egress when it is the sole egress
+  policy selecting the pods.
 
 ### Understanding Storage
 
