@@ -320,7 +320,7 @@ async def get_config() -> dict[str, dict[str, bool]]:
         "features": {
             "terminal": True,
             "notebooks": True,
-            "desktop": True,
+            "desktop": False,
         },
     }
 
@@ -669,12 +669,16 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
     )
 
 
+# Virtual desktop endpoints are intentionally hidden from the OpenAPI schema
+# (the virtual desktop is not actively maintained). The routes remain mounted for
+# any direct callers but are not advertised to agents via /openapi.json.
 @app.get(
     "/desktop",
     operation_id="desktop_status",
     summary="Get desktop status",
     description="Returns the current state of the virtual desktop: whether it is running, the display dimensions, and the VNC/noVNC ports.",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_status(
     request: Request,
@@ -692,6 +696,7 @@ async def proxy_desktop_status(
     summary="Start the virtual desktop",
     description="Start Xvfb, x11vnc, noVNC, and a window manager. Idempotent — returns immediately if already running.",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_start(
     request: Request,
@@ -709,6 +714,7 @@ async def proxy_desktop_start(
     summary="Stop the virtual desktop",
     description="Terminate all desktop processes (Xvfb, x11vnc, noVNC, window manager).",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_stop(
     request: Request,
@@ -726,6 +732,7 @@ async def proxy_desktop_stop(
     summary="Capture a screenshot",
     description="Capture a PNG screenshot of the virtual display. Returns base64-encoded JSON by default, or raw binary PNG when Accept: image/png is set or ?format=raw is passed.",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_screenshot(
     request: Request,
@@ -750,6 +757,7 @@ async def proxy_desktop_screenshot(
     summary="Mouse click",
     description="Move the mouse to (x, y) and click. Button 1 = left, 2 = middle, 3 = right.",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_click(
     request: Request,
@@ -767,6 +775,7 @@ async def proxy_desktop_click(
     summary="Move the mouse",
     description="Move the mouse cursor to the specified coordinates without clicking.",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_mouse_move(
     request: Request,
@@ -787,6 +796,7 @@ async def proxy_desktop_mouse_move(
     summary="Drag (mouse down, move, mouse up)",
     description="Press and hold a mouse button at (start_x, start_y), drag to (end_x, end_y), then release.",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_drag(
     request: Request,
@@ -804,6 +814,7 @@ async def proxy_desktop_drag(
     summary="Type text",
     description="Type text into the currently focused window, as if entered on a keyboard.",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_type(
     request: Request,
@@ -821,6 +832,7 @@ async def proxy_desktop_type(
     summary="Press a key or key combination",
     description='Press a key or key combination. Examples: "Return", "Escape", "ctrl+c", "alt+F4", "super".',
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_key(
     request: Request,
@@ -838,6 +850,7 @@ async def proxy_desktop_key(
     summary="Scroll at a position",
     description="Move to (x, y) and scroll up or down by the given amount.",
     dependencies=[Depends(verify_api_key)],
+    include_in_schema=False,
 )
 async def proxy_desktop_scroll(
     request: Request,
