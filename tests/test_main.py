@@ -167,7 +167,8 @@ def test_openapi_file_post_body_params(client):
         assert chunk_schema.get("required", []) == ["target", "replacement"]
 
 
-def test_openapi_exposes_desktop_routes(client):
+def test_openapi_hides_desktop_routes(client):
+    """Virtual desktop endpoints are hidden from the OpenAPI schema (not maintained)."""
     spec = _get_openapi(client)
     paths = spec["paths"]
 
@@ -183,7 +184,7 @@ def test_openapi_exposes_desktop_routes(client):
         "/desktop/key",
         "/desktop/scroll",
     ]:
-        assert route in paths, f"Missing desktop route: {route}"
+        assert route not in paths, f"Desktop route {route} should be hidden from schema"
 
 
 def test_desktop_routes_require_auth(client):
