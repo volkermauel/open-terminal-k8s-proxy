@@ -33,6 +33,10 @@ def mock_k8s_client():
         mock.list_terminal_pods.return_value = MagicMock(items=[])
         mock.create_pod.return_value = MagicMock(metadata=MagicMock(name="terminal-test"))
         mock.wait_for_pod_ready = AsyncMock(return_value=(True, "10.0.0.1"))
+        # self-healing create path defaults (fresh create; override per-test)
+        mock.create_or_get_secret.return_value = (MagicMock(), True)
+        mock.create_or_get_service.return_value = MagicMock()
+        mock.get_pod.return_value = None
         yield mock
 
 
@@ -339,7 +343,7 @@ async def test_home_and_cwd_set_when_pvc_mounted(mock_k8s_client, mock_storage_m
     assert "HOME" in env_names
     assert next(e for e in env if e["name"] == "HOME")["value"] == "/data"
     args = pod_manifest["spec"]["containers"][0].get("args", [])
-    assert args == ["--cwd", "/data"]
+    assert args == ["run", "--cwd", "/data"]
 
 
 async def test_no_home_no_cwd_without_pvc(mock_k8s_client, mock_storage_manager):
@@ -557,3 +561,145 @@ async def test_cleanup_idle_uses_chat_timeout_for_chat_pods(mock_k8s_client):
 
     assert chat_key not in pm._pods  # evicted (over short chat timeout)
     assert user.user_hash in pm._pods  # retained (under long user timeout)
+
+
+# ---------------------------------------------------------------------------
+# Self-healing resource creation (secret reuse, pod adoption, dead-leftover cleanup)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_reuses_leftover_secret_and_adopts_key(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(proxy_api_key="k", namespace="ns", storage_mode=StorageMode.PER_USER)
+    pm = PodManager(cfg)
+    pm._get_api_key_from_secret = MagicMock(return_value="adopted-key")
+    mock_k8s_client.create_or_get_secret.return_value = (MagicMock(), False)  # leftover secret
+    mock_k8s_client.get_pod.return_value = None
+
+    t = await pm.get_or_create("user-1")
+
+    assert t.api_key == "adopted-key"  # adopted the existing secret's key
+    mock_k8s_client.create_pod.assert_called_once()  # fresh pod still created
+
+
+@pytest.mark.asyncio
+async def test_create_adopts_live_pod_and_skips_create(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(proxy_api_key="k", namespace="ns", storage_mode=StorageMode.PER_USER)
+    pm = PodManager(cfg)
+    live = MagicMock()
+    live.status.phase = "Running"
+    mock_k8s_client.get_pod.return_value = live
+
+    await pm.get_or_create("user-1")
+
+    mock_k8s_client.create_pod.assert_not_called()  # adopted the live leftover
+
+
+@pytest.mark.asyncio
+async def test_create_removes_dead_leftover_then_creates(mock_k8s_client, mock_storage_manager):
+    cfg = Settings(proxy_api_key="k", namespace="ns", storage_mode=StorageMode.PER_USER)
+    pm = PodManager(cfg)
+    dead = MagicMock()
+    dead.status.phase = "Failed"
+    mock_k8s_client.get_pod.return_value = dead
+
+    await pm.get_or_create("user-1")
+
+    mock_k8s_client.delete_pod.assert_called_once()  # removed the dead leftover
+    mock_k8s_client.create_pod.assert_called_once()  # then created a fresh pod
+
+
+# ---------------------------------------------------------------------------
+# perUserPerChat mode: per-chat pod + dedicated per-user RWX PVC
+# ---------------------------------------------------------------------------
+
+
+def test_peruserperchat_requires_peruser_storage():
+    from pydantic import ValidationError
+
+    from terminal_proxy.config import PodMode
+
+    with pytest.raises(ValidationError):
+        Settings(
+            proxy_api_key="k",
+            pod_mode=PodMode.PER_USER_PER_CHAT,
+            storage_mode=StorageMode.SHARED,
+        )
+
+
+@pytest.mark.asyncio
+async def test_peruserperchat_creates_per_chat_pod_with_per_user_pvc(mock_k8s_client, mock_storage_manager):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=100,
+        storage_mode=StorageMode.PER_USER,
+        pod_mode=PodMode.PER_USER_PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    a = await pm.get_or_create("user-1", "chat-a")
+    b = await pm.get_or_create("user-1", "chat-b")
+
+    assert a.is_chat_pod and b.is_chat_pod and a.pod_name != b.pod_name
+    # both chat pods share ONE per-user PVC
+    assert a.pvc_name == b.pvc_name == f"pvc-{a.user_hash}"
+    assert len(pm._pods) == 2
+    mock_storage_manager.create_user_pvc.assert_called_with(f"pvc-{a.user_hash}", a.user_hash)
+
+
+@pytest.mark.asyncio
+async def test_peruserperchat_pvc_refcount_keeps_pvc_until_last_chat(
+    mock_k8s_client, mock_storage_manager
+):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        storage_mode=StorageMode.PER_USER,
+        pod_mode=PodMode.PER_USER_PER_CHAT,
+        storage_retain_pvc=False,  # delete PVC on removal
+    )
+    pm = PodManager(cfg)
+    a = await pm.get_or_create("user-1", "chat-a")
+    b = await pm.get_or_create("user-1", "chat-b")
+    a_key = f"{a.user_hash}-{a.chat_hash}"
+    b_key = f"{b.user_hash}-{b.chat_hash}"
+
+    # Removing one chat pod must keep the shared per-user PVC (sibling still uses it).
+    await pm._delete_pod(a_key)
+    mock_storage_manager.delete_user_pvc.assert_not_called()
+    mock_storage_manager.touch_pvc.assert_called()
+
+    # Removing the last chat pod now deletes the PVC.
+    await pm._delete_pod(b_key)
+    mock_storage_manager.delete_user_pvc.assert_called_once_with(f"pvc-{b.user_hash}")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_peruserperchat_pvc_is_per_user(mock_k8s_client):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        storage_mode=StorageMode.PER_USER,
+        pod_mode=PodMode.PER_USER_PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    mock_pod = MagicMock()
+    mock_pod.metadata.labels = {"user-id-hash": "abc123", "chat-id-hash": "def456"}
+    mock_pod.metadata.annotations = {"chat-slug": "chat-x"}
+    mock_pod.metadata.name = "terminal-abc123-def456"
+    mock_pod.metadata.creation_timestamp = datetime.utcnow()
+    mock_pod.status.phase = "Running"
+    mock_pod.status.pod_ip = "10.0.0.1"
+    mock_k8s_client.list_terminal_pods.return_value = MagicMock(items=[mock_pod])
+
+    await pm._reconcile_existing_pods()
+
+    t = pm._pods["abc123-def456"]
+    assert t.is_chat_pod
+    assert t.pvc_name == "pvc-abc123"  # per-user, NOT pvc-abc123-def456

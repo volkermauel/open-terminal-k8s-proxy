@@ -26,7 +26,7 @@ def test_cwd_and_home_set_to_data_mount_with_pvc() -> None:
     cfg = _cfg(storage_mode=StorageMode.PER_USER)
     pod, _pvc, _sec, _svc = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
     c = _container(pod)
-    assert c["args"] == ["--cwd", "/data"]
+    assert c["args"] == ["run", "--cwd", "/data"]
     assert next(e for e in c["env"] if e["name"] == "HOME")["value"] == "/data"
     # the PVC is mounted at the data mount path
     assert c["volumeMounts"][0]["mountPath"] == "/data"
@@ -45,7 +45,7 @@ def test_data_mount_path_config_used() -> None:
     cfg = _cfg(storage_mode=StorageMode.PER_USER, data_mount_path="/workspace")
     pod, *_ = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
     c = _container(pod)
-    assert c["args"] == ["--cwd", "/workspace"]
+    assert c["args"] == ["run", "--cwd", "/workspace"]
     # the volume mount path follows data_mount_path (not hardcoded /data)
     assert c["volumeMounts"][0]["mountPath"] == "/workspace"
     assert next(e for e in c["env"] if e["name"] == "HOME")["value"] == "/workspace"
@@ -58,7 +58,7 @@ def test_perchat_pod_has_initcontainer_and_chat_labels() -> None:
     c = _container(pod)
 
     # cwd targets the chat subdir on the shared volume
-    assert c["args"] == ["--cwd", "/data/chat-42"]
+    assert c["args"] == ["run", "--cwd", "/data/chat-42"]
     # chat label + annotation
     assert pod["metadata"]["labels"].get("chat-id-hash") == t.chat_hash
     assert pod["metadata"]["annotations"]["chat-slug"] == "chat-42"
@@ -98,3 +98,20 @@ def test_service_selector_user_pod_unaffected() -> None:
     t = TerminalPod.create("u", "k")
     svc = build_service_manifest(t, cfg)
     assert "chat-id-hash" not in svc["spec"]["selector"]
+
+
+def test_peruserperchat_pod_uses_per_user_pvc_and_chat_dir() -> None:
+    # perUserPerChat: per-chat pod backed by a dedicated per-user PVC (no subPath).
+    cfg = _cfg(storage_mode=StorageMode.PER_USER, pod_mode=PodMode.PER_USER_PER_CHAT)
+    t = TerminalPod.create("u", "k", "chat-7")
+    t.pvc_name = f"pvc-{t.user_hash}"  # assigned by pod_manager in perUserPerChat
+    pod, _pvc, _sec, _svc = build_pod_for_user(t, cfg)
+    c = _container(pod)
+    assert c["args"] == ["run", "--cwd", "/data/chat-7"]
+    vm = c["volumeMounts"][0]
+    assert vm["mountPath"] == "/data"
+    assert vm["name"] == "user-data"  # per-user PVC, not the shared volume
+    assert "subPath" not in vm
+    assert pod["metadata"]["labels"].get("chat-id-hash") == t.chat_hash
+    inits = pod["spec"].get("initContainers", [])
+    assert len(inits) == 1 and "mkdir -p /data/chat-7" in inits[0]["command"][2]
