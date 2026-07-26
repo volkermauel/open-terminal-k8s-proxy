@@ -342,8 +342,7 @@ async def test_home_and_cwd_set_when_pvc_mounted(mock_k8s_client, mock_storage_m
     assert args == ["--cwd", "/data"]
 
 
-@pytest.mark.asyncio
-async def test_home_and_cwd_set_to_home_user_without_pvc(mock_k8s_client, mock_storage_manager):
+async def test_no_home_no_cwd_without_pvc(mock_k8s_client, mock_storage_manager):
     cfg = Settings(
         proxy_api_key="test-key",
         namespace="test-ns",
@@ -354,12 +353,11 @@ async def test_home_and_cwd_set_to_home_user_without_pvc(mock_k8s_client, mock_s
     await pm.get_or_create("no-home-user")
 
     pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
-    env = pod_manifest["spec"]["containers"][0]["env"]
-    env_names = {e["name"] for e in env}
-    assert "HOME" in env_names
-    assert next(e for e in env if e["name"] == "HOME")["value"] == "/home/user"
-    args = pod_manifest["spec"]["containers"][0].get("args", [])
-    assert args == ["--cwd", "/home/user"]
+    container = pod_manifest["spec"]["containers"][0]
+    env_names = {e["name"] for e in container["env"]}
+    # none mode: open-terminal uses its image default; no --cwd / HOME override
+    assert "HOME" not in env_names
+    assert "args" not in container
 
 
 @pytest.mark.asyncio
@@ -416,6 +414,58 @@ async def test_get_or_create_perchat_provisions_one_pod_per_chat(
 
 
 @pytest.mark.asyncio
+async def test_perchat_evicts_oldest_user_pod_at_per_user_cap(
+    mock_k8s_client, mock_storage_manager
+):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=100,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+        max_pods_per_user=2,
+    )
+    pm = PodManager(cfg)
+    a = await pm.get_or_create("user-1", "chat-a")
+    b = await pm.get_or_create("user-1", "chat-b")
+    assert len(pm._pods) == 2
+    # mark 'a' older so it is the one evicted when the cap is hit
+    a_key = f"{a.user_hash}-{a.chat_hash}"
+    pm._pods[a_key].last_active_at = datetime.utcnow() - timedelta(seconds=1000)
+    # third chat -> per-user cap (2) reached -> oldest ('a') evicted
+    c = await pm.get_or_create("user-1", "chat-c")
+    assert len(pm._pods) == 2
+    assert a_key not in pm._pods
+    assert c.pod_name not in (a.pod_name, b.pod_name)
+
+
+@pytest.mark.asyncio
+async def test_perchat_per_user_cap_does_not_touch_other_users(
+    mock_k8s_client, mock_storage_manager
+):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=100,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+        max_pods_per_user=1,
+    )
+    pm = PodManager(cfg)
+    await pm.get_or_create("user-1", "chat-a")
+    u2 = await pm.get_or_create("user-2", "chat-a")
+    # user-1 hitting their cap (1) must not evict user-2's pod
+    await pm.get_or_create("user-1", "chat-b")
+    u2_key = f"{u2.user_hash}-{u2.chat_hash}"
+    assert u2_key in pm._pods
+    assert len([t for t in pm._pods.values() if t.user_hash == u2.user_hash]) == 1
+
+
+@pytest.mark.asyncio
 async def test_get_or_create_peruser_ignores_chat_id(mock_k8s_client, mock_storage_manager):
     from terminal_proxy.config import PodMode
 
@@ -465,7 +515,7 @@ async def test_reconcile_rebuilds_chat_pod(mock_k8s_client):
     pm = PodManager(cfg)
     mock_pod = MagicMock()
     mock_pod.metadata.labels = {"user-id-hash": "abc123", "chat-id-hash": "def456"}
-    mock_pod.metadata.annotations = {"chat-id": "chat-x"}
+    mock_pod.metadata.annotations = {"chat-slug": "chat-x"}
     mock_pod.metadata.name = "terminal-abc123-def456"
     mock_pod.metadata.creation_timestamp = datetime.utcnow()
     mock_pod.status.phase = "Running"

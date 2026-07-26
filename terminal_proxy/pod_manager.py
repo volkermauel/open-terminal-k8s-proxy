@@ -73,7 +73,7 @@ class PodManager:
                     terminal = TerminalPod(
                         user_id=user_hash,
                         user_hash=user_hash,
-                        chat_id=(pod.metadata.annotations or {}).get("chat-id"),
+                        chat_id=(pod.metadata.annotations or {}).get("chat-slug"),
                         chat_hash=chat_hash,
                         pod_name=pod.metadata.name,
                         service_name=f"terminal-{pod_key}",
@@ -135,6 +135,19 @@ class PodManager:
                 k8s_client.delete_pod(terminal.pod_name)
                 del self._pods[pod_key]
 
+            # Per-user cap (perChat mode): bound how many concurrent pods a single
+            # user can hold by evicting that user's oldest idle pod.
+            if per_chat and self.cfg.max_pods_per_user > 0:
+                user_keys = [k for k, t in self._pods.items() if t.user_hash == user_hash]
+                if len(user_keys) >= self.cfg.max_pods_per_user:
+                    oldest = min(user_keys, key=lambda k: self._pods[k].last_active_at)
+                    logger.info(
+                        "Per-user pod cap (%d) reached for %s; evicting oldest chat pod %s",
+                        self.cfg.max_pods_per_user,
+                        user_hash,
+                        oldest,
+                    )
+                    await self._delete_pod(oldest)
             if len(self._pods) >= self.cfg.max_concurrent_pods:
                 await self._evict_oldest()
 
