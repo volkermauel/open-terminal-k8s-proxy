@@ -22,6 +22,7 @@ class PodMode(str, Enum):
 
     PER_USER = "perUser"
     PER_CHAT = "perChat"
+    PER_USER_PER_CHAT = "perUserPerChat"
 
 
 class Settings(BaseSettings):
@@ -111,8 +112,8 @@ class Settings(BaseSettings):
     )
     max_pods_per_user: int = Field(
         default=5,
-        description="Max concurrent terminal pods per user (enforced in perChat mode; "
-        "the user's oldest pod is evicted). 0 disables the per-user cap.",
+        description="Max concurrent terminal pods per user (enforced in perChat/perUserPerChat "
+        "mode; the user's oldest pod is evicted). 0 disables the per-user cap.",
     )
     pod_idle_timeout_seconds: int = Field(
         default=3600,
@@ -132,7 +133,9 @@ class Settings(BaseSettings):
     )
     pod_mode: PodMode = Field(
         default=PodMode.PER_USER,
-        description="Pod provisioning mode: perUser (one pod per user) or perChat (one pod per chat).",
+        description="Pod provisioning mode: perUser (one pod per user), perChat (one pod per "
+        "chat; requires shared storage), or perUserPerChat (one pod per chat with a dedicated "
+        "per-user RWX PVC; requires perUser storage).",
     )
     chat_pod_idle_timeout_seconds: int = Field(
         default=300,
@@ -163,11 +166,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_pod_mode_storage(self) -> Settings:
-        """perChat mode requires shared RWX storage (every chat pod mounts the same volume)."""
+        """Validate pod_mode <-> storage_mode compatibility."""
         if self.pod_mode == PodMode.PER_CHAT and self.storage_mode != StorageMode.SHARED:
             raise ValueError(
                 "podMode 'perChat' requires storage.mode 'shared' (ReadWriteMany). "
                 "Set storage.mode=shared before enabling podMode=perChat."
+            )
+        if (
+            self.pod_mode == PodMode.PER_USER_PER_CHAT
+            and self.storage_mode != StorageMode.PER_USER
+        ):
+            raise ValueError(
+                "podMode 'perUserPerChat' requires storage.mode 'perUser' "
+                "(a dedicated ReadWriteMany PVC per user, shared by that user's chat pods). "
+                "Set storage.mode=perUser before enabling podMode=perUserPerChat."
             )
         return self
 
