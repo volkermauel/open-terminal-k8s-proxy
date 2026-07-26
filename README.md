@@ -176,6 +176,44 @@ These are orthogonal. When `storage.mode: none`, ephemeral-storage limits are th
 
 When a PVC is mounted, the pod `securityContext` is set with `fsGroup: 1000` and `fsGroupChangePolicy: "Always"`, ensuring the mounted volume contents are owned by gid 1000 on every pod start.
 
+### Per-chat isolation & working directory
+
+Every terminal pod launches `open-terminal` with `--cwd <mount>` (and `HOME` set to the
+same path), so terminals open **inside** the persistent data volume (`/data` when a PVC
+is configured, `/home/user` in `none` mode). This fixes a bug where terminals opened in
+the container root and writes never reached the PVC.
+
+On top of that, each chat — identified by the `X-Session-Id` header Open WebUI sends —
+gets its own working directory `<mount>/<chatid>`, created automatically on first use, so
+concurrent chats don't clobber each other's files. Enable/disable with:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `terminal.dataMountPath` | `/data` | PVC mount path used as `--cwd` / `HOME` |
+| `perChatDirs.enabled` | `true` | Create a per-chat working directory per `X-Session-Id` |
+
+By default the proxy runs **one pod per user** (`podMode: perUser`). For stronger
+isolation you can run **one pod per chat**, which requires shared RWX storage (every
+chat pod mounts the same volume and isolates via its chat directory):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `podMode` | `perUser` | `perUser` (one pod per user) or `perChat` (one pod per chat; requires `storage.mode: shared`) |
+| `chatPodIdleTimeoutSeconds` | `300` | Idle timeout for per-chat pods (users switching chats frequently won't accumulate pods) |
+
+```yaml
+# Enable pod-per-chat with shared RWX storage
+storage:
+  mode: shared
+podMode: perChat
+chatPodIdleTimeoutSeconds: 300
+```
+
+> **Note:** `podMode: perChat` requires `storage.mode: shared` (ReadWriteMany); the proxy
+> refuses to start otherwise. Per-chat isolation also requires the client to send
+> `X-Session-Id`; without it, chats fall back to a single shared directory (and, in
+> `perChat` mode, a single "default" pod per user).
+
 ## Integration with Open WebUI
 
 Add this proxy as an "Open Terminal" integration in Open WebUI admin settings:

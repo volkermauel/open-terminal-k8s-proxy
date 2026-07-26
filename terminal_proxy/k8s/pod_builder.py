@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import base64
 import logging
+import shlex
 from typing import Any, cast
 
 from terminal_proxy.config import Settings, StorageMode
-from terminal_proxy.models import TerminalPod
+from terminal_proxy.models import TerminalPod, sanitize_chat_id
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,8 @@ def build_pod_manifest(
         "managed-by": cfg.labels_managed_by,
         "user-id-hash": terminal_pod.user_hash,
     }
+    if terminal_pod.chat_hash:
+        labels["chat-id-hash"] = terminal_pod.chat_hash
 
     volumes = []
     volume_mounts = []
@@ -126,6 +129,13 @@ def build_pod_manifest(
             mount["subPath"] = shared_sub_path
         volume_mounts.append(mount)
 
+    has_volume = bool(volume_mounts)
+    base_dir = cfg.data_mount_path if has_volume else "/home/user"
+    if terminal_pod.chat_id and terminal_pod.chat_hash:
+        cwd_target = f"{base_dir}/{sanitize_chat_id(terminal_pod.chat_id)}"
+    else:
+        cwd_target = base_dir
+
     env: list[dict[str, Any]] = []
 
     env_var: dict[str, Any]
@@ -144,8 +154,7 @@ def build_pod_manifest(
 
     env.append(env_var)
 
-    if volume_mounts:
-        env.append({"name": "HOME", "value": "/data"})
+    env.append({"name": "HOME", "value": cwd_target})
 
     container = {
         "name": "terminal",
@@ -165,6 +174,7 @@ def build_pod_manifest(
         },
         "volumeMounts": volume_mounts,
     }
+    container["args"] = ["--cwd", cwd_target]
 
     if cfg.terminal_ephemeral_storage_request:
         resources = cast(dict[str, Any], container["resources"])
@@ -178,6 +188,16 @@ def build_pod_manifest(
         "volumes": volumes,
         "restartPolicy": "Never",
     }
+    if terminal_pod.chat_hash and has_volume:
+        spec["initContainers"] = [
+            {
+                "name": "init-chat-dir",
+                "image": cfg.terminal_image,
+                "imagePullPolicy": cfg.terminal_image_pull_policy,
+                "command": ["sh", "-c", f"mkdir -p {shlex.quote(cwd_target)}"],
+                "volumeMounts": volume_mounts,
+            }
+        ]
 
     if volume_mounts:
         spec["securityContext"] = {
@@ -194,7 +214,7 @@ def build_pod_manifest(
     if tolerations:
         spec["tolerations"] = tolerations
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "apiVersion": "v1",
         "kind": "Pod",
         "metadata": {
@@ -203,6 +223,8 @@ def build_pod_manifest(
         },
         "spec": spec,
     }
+    if terminal_pod.chat_id:
+        manifest["metadata"]["annotations"] = {"chat-id": terminal_pod.chat_id}
 
     return manifest
 
@@ -217,8 +239,10 @@ def build_service_manifest(
         "managed-by": cfg.labels_managed_by,
         "user-id-hash": terminal_pod.user_hash,
     }
+    if terminal_pod.chat_hash:
+        labels["chat-id-hash"] = terminal_pod.chat_hash
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "apiVersion": "v1",
         "kind": "Service",
         "metadata": {
@@ -241,6 +265,8 @@ def build_service_manifest(
             ],
         },
     }
+    if terminal_pod.chat_hash:
+        manifest["spec"]["selector"]["chat-id-hash"] = terminal_pod.chat_hash
 
     return manifest
 

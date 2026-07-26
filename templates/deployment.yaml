@@ -76,6 +76,14 @@ spec:
               value: "{{ .Values.podStartupTimeoutSeconds }}"
             - name: POD_CLEANUP_INTERVAL_SECONDS
               value: "{{ .Values.podCleanupIntervalSeconds }}"
+            - name: DATA_MOUNT_PATH
+              value: "{{ .Values.terminal.dataMountPath }}"
+            - name: POD_MODE
+              value: "{{ .Values.podMode }}"
+            - name: CHAT_POD_IDLE_TIMEOUT_SECONDS
+              value: "{{ .Values.chatPodIdleTimeoutSeconds }}"
+            - name: PER_CHAT_DIRS_ENABLED
+              value: "{{ .Values.perChatDirs.enabled }}"
           resources:
             requests:
               cpu: {{ .Values.resources.requests.cpu }}
