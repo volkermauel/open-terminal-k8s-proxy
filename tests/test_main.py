@@ -338,3 +338,30 @@ def test_openapi_catch_all_files_route_hidden(client):
     assert len(catch_all) == 0, (
         f"Catch-all /files/{{path}} should be hidden from schema. Found: {catch_all}"
     )
+
+
+@pytest.mark.asyncio
+async def test_create_terminal_for_user_bootstraps_chat_dir() -> None:
+    """Every terminal resolution (POST /api/terminals and each perUser read) must seed
+    the per-chat cwd so the session cwd is bound before the PTY spawns."""
+    from unittest.mock import ANY, AsyncMock, patch
+
+    from terminal_proxy.main import _create_terminal_for_user
+    from terminal_proxy.models import PodState, TerminalPod
+
+    terminal = TerminalPod.create("user-1", "key")
+    terminal.state = PodState.RUNNING
+
+    with (
+        patch("terminal_proxy.main.ensure_k8s_available"),
+        patch(
+            "terminal_proxy.main.pod_manager.get_or_create",
+            new=AsyncMock(return_value=terminal),
+        ),
+        patch("terminal_proxy.main.ensure_chat_dir", new=AsyncMock()) as bootstrap,
+    ):
+        result = await _create_terminal_for_user("user-1", "chat-9")
+
+    assert result is terminal
+    # ensure_chat_dir(terminal, chat_id, settings) -- implicit on every resolution
+    bootstrap.assert_awaited_once_with(terminal, "chat-9", ANY)
