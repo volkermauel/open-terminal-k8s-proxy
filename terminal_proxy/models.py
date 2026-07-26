@@ -17,6 +17,30 @@ def user_id_to_hash(user_id: str) -> str:
     return hashlib.sha256(user_id.encode()).hexdigest()[:12]
 
 
+def chat_id_to_hash(chat_id: str) -> str:
+    """Convert chat_id (X-Session-Id) to a short K8s-safe hash."""
+    return hashlib.sha256(chat_id.encode()).hexdigest()[:12]
+
+
+def sanitize_chat_id(raw: str) -> str:
+    """Sanitize a client-supplied chat id into a safe single path component.
+
+    Keeps [A-Za-z0-9._-], collapses everything else to '-', strips leading/trailing
+    '-' and '.', caps length, and falls back to a hash for empty/all-dot results.
+    The output never contains a path separator and is never '.' or '..', so it is
+    safe to append to a base directory (no path traversal).
+    """
+    if not raw:
+        return hashlib.sha256(b"empty").hexdigest()[:16]
+    slug = re.sub(r"[^A-Za-z0-9._-]", "-", raw)
+    slug = re.sub(r"-+", "-", slug)
+    slug = slug.strip("-.")
+    slug = slug[:64].rstrip("-.")
+    if not slug:
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+    return slug
+
+
 def sanitize_k8s_name(name: str) -> str:
     """Sanitize a name to be K8s-compatible (DNS label)."""
     name = name.lower()
@@ -50,17 +74,42 @@ class TerminalPod:
     created_at: datetime
     last_active_at: datetime
     pod_ip: str | None = None
+    chat_id: str | None = None
+    chat_hash: str | None = None
 
     @property
     def endpoint(self) -> str:
         """Get the HTTP endpoint for the terminal pod via service."""
         return f"http://{self.service_name}:8000"
 
+    @property
+    def is_chat_pod(self) -> bool:
+        """True if this pod is scoped to a single chat (perChat mode)."""
+        return self.chat_hash is not None
+
     @classmethod
-    def create(cls, user_id: str, api_key: str) -> TerminalPod:
+    def create(cls, user_id: str, api_key: str, chat_id: str | None = None) -> TerminalPod:
         """Create a new TerminalPod instance with generated names and timestamps."""
         user_hash = user_id_to_hash(user_id)
+        chat_hash = chat_id_to_hash(chat_id) if chat_id else None
         now = datetime.utcnow()
+        if chat_hash:
+            # perChat: one pod per (user, chat); no per-pod PVC (shared RWX volume).
+            key = f"{user_hash}-{chat_hash}"
+            return cls(
+                user_id=user_id,
+                user_hash=user_hash,
+                chat_id=chat_id,
+                chat_hash=chat_hash,
+                pod_name=f"terminal-{key}",
+                service_name=f"terminal-{key}",
+                secret_name=f"terminal-secret-{key}",
+                pvc_name=None,
+                api_key=api_key,
+                state=PodState.CREATING,
+                created_at=now,
+                last_active_at=now,
+            )
         return cls(
             user_id=user_id,
             user_hash=user_hash,

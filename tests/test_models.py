@@ -76,3 +76,36 @@ def test_terminal_pod_endpoint():
     )
 
     assert terminal_no_ip.endpoint == "http://terminal-abc123:8000"
+
+
+def test_chat_id_to_hash():
+    from terminal_proxy.models import chat_id_to_hash
+
+    h = chat_id_to_hash("chat-1")
+    assert len(h) == 12
+    assert h != chat_id_to_hash("chat-2")
+
+
+def test_sanitize_chat_id_safe_path_component():
+    from terminal_proxy.models import sanitize_chat_id
+
+    assert sanitize_chat_id("chat-42") == "chat-42"
+    assert sanitize_chat_id("../x") == "x"
+    assert sanitize_chat_id("a/b?c=1") == "a-b-c-1"
+    all_dots = sanitize_chat_id("....")
+    assert all_dots and all_dots not in (".", "..") and "/" not in all_dots
+    assert "/" not in sanitize_chat_id("../etc/passwd")
+    assert sanitize_chat_id("")  # non-empty hash fallback
+    assert len(sanitize_chat_id("x" * 200)) <= 64
+
+
+def test_terminal_pod_create_chat_mode():
+    t = TerminalPod.create("user-1", "api-key", "chat-1")
+    assert t.is_chat_pod
+    assert t.chat_hash and t.chat_id == "chat-1"
+    assert t.pvc_name is None
+    assert len(t.pod_name) <= 63
+
+    user_only = TerminalPod.create("user-1", "api-key")
+    assert not user_only.is_chat_pod
+    assert user_only.pvc_name and user_only.chat_hash is None

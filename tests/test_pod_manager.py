@@ -323,7 +323,7 @@ async def test_get_or_create_retains_pvc_on_recycle(mock_k8s_client, mock_storag
 
 
 @pytest.mark.asyncio
-async def test_home_env_set_when_pvc_mounted(mock_k8s_client, mock_storage_manager):
+async def test_home_and_cwd_set_when_pvc_mounted(mock_k8s_client, mock_storage_manager):
     cfg = Settings(
         proxy_api_key="test-key",
         namespace="test-ns",
@@ -338,10 +338,12 @@ async def test_home_env_set_when_pvc_mounted(mock_k8s_client, mock_storage_manag
     env_names = {e["name"] for e in env}
     assert "HOME" in env_names
     assert next(e for e in env if e["name"] == "HOME")["value"] == "/data"
+    args = pod_manifest["spec"]["containers"][0].get("args", [])
+    assert args == ["--cwd", "/data"]
 
 
 @pytest.mark.asyncio
-async def test_home_env_not_set_without_pvc(mock_k8s_client, mock_storage_manager):
+async def test_home_and_cwd_set_to_home_user_without_pvc(mock_k8s_client, mock_storage_manager):
     cfg = Settings(
         proxy_api_key="test-key",
         namespace="test-ns",
@@ -354,7 +356,10 @@ async def test_home_env_not_set_without_pvc(mock_k8s_client, mock_storage_manage
     pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
     env = pod_manifest["spec"]["containers"][0]["env"]
     env_names = {e["name"] for e in env}
-    assert "HOME" not in env_names
+    assert "HOME" in env_names
+    assert next(e for e in env if e["name"] == "HOME")["value"] == "/home/user"
+    args = pod_manifest["spec"]["containers"][0].get("args", [])
+    assert args == ["--cwd", "/home/user"]
 
 
 @pytest.mark.asyncio
@@ -387,3 +392,118 @@ async def test_security_context_not_set_without_pvc(mock_k8s_client, mock_storag
 
     pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
     assert "securityContext" not in pod_manifest["spec"]
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_perchat_provisions_one_pod_per_chat(
+    mock_k8s_client, mock_storage_manager
+):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    a = await pm.get_or_create("user-1", "chat-a")
+    b = await pm.get_or_create("user-1", "chat-b")
+    assert a.pod_name != b.pod_name
+    assert a.is_chat_pod and b.is_chat_pod
+    assert len(pm._pods) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_peruser_ignores_chat_id(mock_k8s_client, mock_storage_manager):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.PER_USER,
+        pod_mode=PodMode.PER_USER,
+    )
+    pm = PodManager(cfg)
+    await pm.get_or_create("user-1", "chat-a")
+    await pm.get_or_create("user-1", "chat-b")
+    assert len(pm._pods) == 1  # same user pod regardless of chat
+
+
+@pytest.mark.asyncio
+async def test_perchat_falls_back_to_user_pod_when_no_session(
+    mock_k8s_client, mock_storage_manager
+):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    # no chat_id -> per_chat False -> keyed by user hash (a single pod)
+    t = await pm.get_or_create("user-1", None)
+    assert not t.is_chat_pod
+    assert len(pm._pods) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_rebuilds_chat_pod(mock_k8s_client):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    mock_pod = MagicMock()
+    mock_pod.metadata.labels = {"user-id-hash": "abc123", "chat-id-hash": "def456"}
+    mock_pod.metadata.annotations = {"chat-id": "chat-x"}
+    mock_pod.metadata.name = "terminal-abc123-def456"
+    mock_pod.metadata.creation_timestamp = datetime.utcnow()
+    mock_pod.status.phase = "Running"
+    mock_pod.status.pod_ip = "10.0.0.1"
+    mock_k8s_client.list_terminal_pods.return_value = MagicMock(items=[mock_pod])
+
+    await pm._reconcile_existing_pods()
+
+    assert "abc123-def456" in pm._pods
+    t = pm._pods["abc123-def456"]
+    assert t.is_chat_pod and t.chat_id == "chat-x"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_idle_uses_chat_timeout_for_chat_pods(mock_k8s_client):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+        pod_idle_timeout_seconds=9999,
+        chat_pod_idle_timeout_seconds=10,
+        pod_cleanup_interval_seconds=9999,
+    )
+    pm = PodManager(cfg)
+    chat = TerminalPod.create("u", "k", "chat-1")
+    chat.state = PodState.RUNNING
+    chat.last_active_at = datetime.utcnow() - timedelta(seconds=100)
+    user = TerminalPod.create("u", "k")
+    user.state = PodState.RUNNING
+    user.last_active_at = datetime.utcnow() - timedelta(seconds=100)
+    chat_key = f"{chat.user_hash}-{chat.chat_hash}"
+    pm._pods[chat_key] = chat
+    pm._pods[user.user_hash] = user
+
+    await pm._cleanup_idle_pods()
+
+    assert chat_key not in pm._pods  # evicted (over short chat timeout)
+    assert user.user_hash in pm._pods  # retained (under long user timeout)
