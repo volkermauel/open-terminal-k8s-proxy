@@ -40,7 +40,6 @@ def _patch_client() -> tuple[MagicMock, Any]:
     client = MagicMock()
     client.__aenter__ = AsyncMock(return_value=client)
     client.__aexit__ = AsyncMock(return_value=False)
-    client.get = AsyncMock(return_value=_resp(200, {"home": "/data"}))
     client.post = AsyncMock(return_value=_resp(200))
     ctx = patch("terminal_proxy.chat_bootstrap.httpx.AsyncClient", return_value=client)
     return client, ctx
@@ -53,8 +52,8 @@ async def test_ensure_chat_dir_mkdir_then_setcwd_per_session() -> None:
     with ctx:
         await ensure_chat_dir(_terminal(), "chat-42", cfg)
 
-    # GET learns home, then mkdir, then set_cwd (with X-Session-Id header)
-    assert client.get.call_count == 1
+    # mkdir then set_cwd (with X-Session-Id header); no GET needed -- home is known
+    assert client.get.call_count == 0
     assert client.post.call_count == 2
     mkdir, setcwd = client.post.call_args_list
     assert mkdir.args[0].endswith("/files/mkdir")

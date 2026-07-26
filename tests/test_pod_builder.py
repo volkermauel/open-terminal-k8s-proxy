@@ -28,20 +28,27 @@ def test_cwd_and_home_set_to_data_mount_with_pvc() -> None:
     c = _container(pod)
     assert c["args"] == ["--cwd", "/data"]
     assert next(e for e in c["env"] if e["name"] == "HOME")["value"] == "/data"
+    # the PVC is mounted at the data mount path
+    assert c["volumeMounts"][0]["mountPath"] == "/data"
 
 
-def test_cwd_and_home_set_to_home_user_without_pvc() -> None:
+def test_no_cwd_no_home_without_pvc() -> None:
     cfg = _cfg(storage_mode=StorageMode.NONE)
     pod, _pvc, _sec, _svc = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
     c = _container(pod)
-    assert c["args"] == ["--cwd", "/home/user"]
-    assert next(e for e in c["env"] if e["name"] == "HOME")["value"] == "/home/user"
+    # none mode: open-terminal uses its image default; no --cwd / HOME override
+    assert "args" not in c
+    assert all(e["name"] != "HOME" for e in c["env"])
 
 
 def test_data_mount_path_config_used() -> None:
     cfg = _cfg(storage_mode=StorageMode.PER_USER, data_mount_path="/workspace")
     pod, *_ = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
-    assert _container(pod)["args"] == ["--cwd", "/workspace"]
+    c = _container(pod)
+    assert c["args"] == ["--cwd", "/workspace"]
+    # the volume mount path follows data_mount_path (not hardcoded /data)
+    assert c["volumeMounts"][0]["mountPath"] == "/workspace"
+    assert next(e for e in c["env"] if e["name"] == "HOME")["value"] == "/workspace"
 
 
 def test_perchat_pod_has_initcontainer_and_chat_labels() -> None:
@@ -54,7 +61,7 @@ def test_perchat_pod_has_initcontainer_and_chat_labels() -> None:
     assert c["args"] == ["--cwd", "/data/chat-42"]
     # chat label + annotation
     assert pod["metadata"]["labels"].get("chat-id-hash") == t.chat_hash
-    assert pod["metadata"]["annotations"]["chat-id"] == "chat-42"
+    assert pod["metadata"]["annotations"]["chat-slug"] == "chat-42"
     # initContainer creates the chat dir before the main container starts
     inits = pod["spec"].get("initContainers", [])
     assert len(inits) == 1

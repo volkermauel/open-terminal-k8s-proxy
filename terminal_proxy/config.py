@@ -109,6 +109,11 @@ class Settings(BaseSettings):
         default=100,
         description="Maximum concurrent terminal pods. Evicts longest-idle when reached.",
     )
+    max_pods_per_user: int = Field(
+        default=5,
+        description="Max concurrent terminal pods per user (enforced in perChat mode; "
+        "the user's oldest pod is evicted). 0 disables the per-user cap.",
+    )
     pod_idle_timeout_seconds: int = Field(
         default=3600,
         description="Seconds of inactivity before terminating a terminal pod.",
