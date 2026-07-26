@@ -363,5 +363,31 @@ async def test_create_terminal_for_user_bootstraps_chat_dir() -> None:
         result = await _create_terminal_for_user("user-1", "chat-9")
 
     assert result is terminal
-    # ensure_chat_dir(terminal, chat_id, settings) -- implicit on every resolution
-    bootstrap.assert_awaited_once_with(terminal, "chat-9", ANY)
+    # Reads use the cached bootstrap: ensure_chat_dir(terminal, chat_id, settings, force=False)
+    bootstrap.assert_awaited_once_with(terminal, "chat-9", ANY, force=False)
+
+
+@pytest.mark.asyncio
+async def test_create_terminal_for_user_forces_chat_dir_on_spawn() -> None:
+    """Terminal creation (POST) forces a fresh bootstrap so a chat dir deleted
+    mid-session is recreated before the PTY spawns."""
+    from unittest.mock import ANY, AsyncMock, patch
+
+    from terminal_proxy.main import _create_terminal_for_user
+    from terminal_proxy.models import PodState, TerminalPod
+
+    terminal = TerminalPod.create("user-1", "key")
+    terminal.state = PodState.RUNNING
+
+    with (
+        patch("terminal_proxy.main.ensure_k8s_available"),
+        patch(
+            "terminal_proxy.main.pod_manager.get_or_create",
+            new=AsyncMock(return_value=terminal),
+        ),
+        patch("terminal_proxy.main.ensure_chat_dir", new=AsyncMock()) as bootstrap,
+    ):
+        await _create_terminal_for_user("user-1", "chat-9", force_chat_dir=True)
+
+    # force=True bypasses the cache (recreates a deleted dir) before the PTY spawns
+    bootstrap.assert_awaited_once_with(terminal, "chat-9", ANY, force=True)

@@ -142,7 +142,9 @@ async def get_terminal_for_user(user_id: str, chat_id: str | None = None) -> Ter
     return await _create_terminal_for_user(user_id, chat_id)
 
 
-async def _create_terminal_for_user(user_id: str, chat_id: str | None = None) -> TerminalPod:
+async def _create_terminal_for_user(
+    user_id: str, chat_id: str | None = None, *, force_chat_dir: bool = False
+) -> TerminalPod:
     """Get-or-create a terminal pod (terminal creation: POST /api/terminals)."""
     from kubernetes.client.rest import ApiException
 
@@ -156,7 +158,9 @@ async def _create_terminal_for_user(user_id: str, chat_id: str | None = None) ->
         # terminal (POST /api/terminals AND every perUser read), cached per
         # (pod, chat) so it is ~free after the first call. Must precede the PTY
         # spawn so open-terminal seeds the new session's cwd from it.
-        await ensure_chat_dir(terminal, chat_id, settings)
+        # force_chat_dir=True on terminal creation (POST) re-runs mkdir so a chat
+        # dir deleted mid-session is recreated before the PTY spawns.
+        await ensure_chat_dir(terminal, chat_id, settings, force=force_chat_dir)
         return terminal
     except ApiException as e:
         logger.error(f"K8s API error getting terminal for user {user_id}: {e}")
@@ -722,12 +726,12 @@ async def proxy_terminals(
     """Proxy terminal session management."""
     chat_id = extract_chat_id(request)
     if request.method == "POST":
-        terminal = await _create_terminal_for_user(user_id, chat_id)
+        terminal = await _create_terminal_for_user(user_id, chat_id, force_chat_dir=True)
     else:
         terminal = await get_terminal_for_user(user_id, chat_id)
 
-    # Per-chat cwd bootstrap now happens inside _create_terminal_for_user (covers
-    # POST and every perUser read), so the session cwd is set before the PTY spawns.
+    # POST forces a fresh bootstrap (recreates a chat dir deleted mid-session so the
+    # PTY spawns in a valid cwd); reads use the cached bootstrap via get_terminal_for_user.
 
     target_url = f"{terminal.endpoint}/api/terminals"
     if request.query_params:
