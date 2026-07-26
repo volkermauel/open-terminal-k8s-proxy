@@ -628,7 +628,9 @@ def test_peruserperchat_requires_peruser_storage():
 
 
 @pytest.mark.asyncio
-async def test_peruserperchat_creates_per_chat_pod_with_per_user_pvc(mock_k8s_client, mock_storage_manager):
+async def test_peruserperchat_creates_per_chat_pod_with_per_user_pvc(
+    mock_k8s_client, mock_storage_manager
+):
     from terminal_proxy.config import PodMode
 
     cfg = Settings(
@@ -703,3 +705,145 @@ async def test_reconcile_peruserperchat_pvc_is_per_user(mock_k8s_client):
     t = pm._pods["abc123-def456"]
     assert t.is_chat_pod
     assert t.pvc_name == "pvc-abc123"  # per-user, NOT pvc-abc123-def456
+
+
+# --- perUserPerChat stability: lookup, connection-aware eviction, key resilience ---
+@pytest.mark.asyncio
+async def test_lookup_returns_running_pod_without_creating(mock_k8s_client, mock_storage_manager):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    created = await pm.get_or_create("user-1", "chat-a")
+    mock_k8s_client.reset_mock()
+    found = await pm.lookup("user-1", "chat-a")
+    assert found is not None
+    assert found.pod_name == created.pod_name
+    mock_k8s_client.create_pod.assert_not_called()
+    mock_k8s_client.create_or_get_secret.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lookup_returns_none_when_absent(mock_k8s_client, mock_storage_manager):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    assert await pm.lookup("user-1", "chat-a") is None
+    mock_k8s_client.create_pod.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lookup_does_not_bump_last_active(mock_k8s_client, mock_storage_manager):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    created = await pm.get_or_create("user-1", "chat-a")
+    key = f"{created.user_hash}-{created.chat_hash}"
+    old = datetime.utcnow() - timedelta(seconds=1000)
+    pm._pods[key].last_active_at = old
+    await pm.lookup("user-1", "chat-a")
+    assert pm._pods[key].last_active_at == old
+
+
+@pytest.mark.asyncio
+async def test_perchat_cap_raises_when_all_pods_connected(mock_k8s_client, mock_storage_manager):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=100,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+        max_pods_per_user=2,
+    )
+    pm = PodManager(cfg)
+    a = await pm.get_or_create("user-1", "chat-a")
+    b = await pm.get_or_create("user-1", "chat-b")
+    pm.acquire(pm._pods[f"{a.user_hash}-{a.chat_hash}"])
+    pm.acquire(pm._pods[f"{b.user_hash}-{b.chat_hash}"])
+    with pytest.raises(RuntimeError, match="active connections"):
+        await pm.get_or_create("user-1", "chat-c")
+    assert len(pm._pods) == 2  # nothing evicted while connected
+
+
+@pytest.mark.asyncio
+async def test_idle_cleanup_skips_then_evicts_connected_pod(mock_k8s_client):
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+        chat_pod_idle_timeout_seconds=1,
+    )
+    pm = PodManager(cfg)
+    t = TerminalPod.create("user-1", "key", "chat-a")
+    t.state = PodState.RUNNING
+    t.last_active_at = datetime.utcnow() - timedelta(seconds=1000)
+    key = f"{t.user_hash}-{t.chat_hash}"
+    pm._pods[key] = t
+    pm.acquire(t)  # active websocket -> must survive even when idle
+    t.last_active_at = datetime.utcnow() - timedelta(seconds=1000)  # idle while connected
+    await pm._cleanup_idle_pods()
+    assert key in pm._pods  # connected -> skipped
+    pm.release(t)  # now disconnected, still idle
+    await pm._cleanup_idle_pods()
+    assert key not in pm._pods  # disconnected + idle -> evicted
+
+
+@pytest.mark.asyncio
+async def test_reconcile_reads_api_key_from_pod_referenced_secret(mock_k8s_client):
+    import base64
+
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+    )
+    pm = PodManager(cfg)
+    mock_pod = MagicMock()
+    mock_pod.metadata.labels = {"user-id-hash": "abc123", "chat-id-hash": "def456"}
+    mock_pod.metadata.annotations = {"chat-slug": "chat-x"}
+    mock_pod.metadata.name = "terminal-abc123-def456"
+    mock_pod.metadata.creation_timestamp = datetime.utcnow()
+    mock_pod.status.phase = "Running"
+    mock_pod.status.pod_ip = "10.0.0.1"
+    env = MagicMock()
+    env.name = "OPEN_TERMINAL_API_KEY"
+    env.value_from.secret_key_ref.name = "actual-secret"
+    env.value_from.secret_key_ref.key = "api-key"
+    mock_pod.spec.containers = [MagicMock(env=[env])]
+    mock_k8s_client.list_terminal_pods.return_value = MagicMock(items=[mock_pod])
+    mock_k8s_client.get_secret.return_value = MagicMock(
+        data={"api-key": base64.b64encode(b"actual-key").decode()}
+    )
+    await pm._reconcile_existing_pods()
+    t = pm._pods["abc123-def456"]
+    assert t.api_key == "actual-key"
+    mock_k8s_client.get_secret.assert_called_with("actual-secret")

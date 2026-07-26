@@ -76,6 +76,7 @@ class TerminalPod:
     pod_ip: str | None = None
     chat_id: str | None = None
     chat_hash: str | None = None
+    active_connections: int = 0
 
     @property
     def endpoint(self) -> str:

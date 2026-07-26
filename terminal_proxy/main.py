@@ -128,7 +128,22 @@ def ensure_k8s_available() -> None:
 
 
 async def get_terminal_for_user(user_id: str, chat_id: str | None = None) -> TerminalPod:
-    """Get or create terminal pod with graceful error handling."""
+    """Get a terminal pod for reading/proxying.
+
+    In perChat modes this is a lookup only -- polling/reads must never (re)create
+    pods, which was the source of pod churn. In perUser mode the single shared pod
+    is still get-or-created here.
+    """
+    if settings.pod_mode in (PodMode.PER_CHAT, PodMode.PER_USER_PER_CHAT):
+        terminal = await pod_manager.lookup(user_id, chat_id)
+        if terminal is None:
+            raise HTTPException(status_code=503, detail="Terminal not ready")
+        return terminal
+    return await _create_terminal_for_user(user_id, chat_id)
+
+
+async def _create_terminal_for_user(user_id: str, chat_id: str | None = None) -> TerminalPod:
+    """Get-or-create a terminal pod (terminal creation: POST /api/terminals)."""
     from kubernetes.client.rest import ApiException
 
     ensure_k8s_available()
@@ -701,7 +716,10 @@ async def proxy_terminals(
 ) -> Response:
     """Proxy terminal session management."""
     chat_id = extract_chat_id(request)
-    terminal = await get_terminal_for_user(user_id, chat_id)
+    if request.method == "POST":
+        terminal = await _create_terminal_for_user(user_id, chat_id)
+    else:
+        terminal = await get_terminal_for_user(user_id, chat_id)
 
     # perUser mode: ensure a per-chat working directory before the terminal is
     # created (open-terminal seeds the new session's cwd from it). In perChat
@@ -772,11 +790,15 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
         await client_ws.close(code=1011, reason=f"Internal Error: {e.detail}")
         return
 
-    await ws_proxy.proxy_websocket(
-        client_ws=client_ws,
-        terminal=terminal,
-        path=f"/api/terminals/{session_id}",
-    )
+    pod_manager.acquire(terminal)
+    try:
+        await ws_proxy.proxy_websocket(
+            client_ws=client_ws,
+            terminal=terminal,
+            path=f"/api/terminals/{session_id}",
+        )
+    finally:
+        pod_manager.release(terminal)
 
 
 @app.api_route(
