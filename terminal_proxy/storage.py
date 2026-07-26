@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from terminal_proxy.config import Settings, StorageMode, settings
+from terminal_proxy.config import PodMode, Settings, StorageMode, settings
 from terminal_proxy.k8s.client import k8s_client
 from terminal_proxy.k8s.pod_builder import (
     LAST_ACTIVE_ANNOTATION,
@@ -92,7 +92,11 @@ class StorageManager:
             pvc_name=pvc_name,
             size=self.cfg.storage_per_user_size,
             storage_class_name=self.cfg.storage_class_name,
-            access_mode="ReadWriteOnce",
+            access_mode=(
+                "ReadWriteMany"
+                if self.cfg.pod_mode == PodMode.PER_USER_PER_CHAT
+                else "ReadWriteOnce"
+            ),
             labels=self._user_pvc_labels(user_hash),
             annotations={LAST_ACTIVE_ANNOTATION: datetime.utcnow().isoformat()},
         )

@@ -182,7 +182,9 @@ def build_pod_manifest(
         "volumeMounts": volume_mounts,
     }
     if cwd_target:
-        container["args"] = ["--cwd", cwd_target]
+        # `args` replace the image CMD ("run"); keep the subcommand so the server
+        # actually starts instead of `open-terminal --cwd ...` (which drops `run`).
+        container["args"] = ["run", "--cwd", cwd_target]
 
     if cfg.terminal_ephemeral_storage_request:
         resources = cast(dict[str, Any], container["resources"])

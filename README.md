@@ -194,29 +194,43 @@ concurrent chats don't clobber each other's files. Enable/disable with:
 | `perChatDirs.enabled` | `true` | Create a per-chat working directory per `X-Session-Id` |
 
 By default the proxy runs **one pod per user** (`podMode: perUser`). For stronger
-isolation you can run **one pod per chat**, which requires shared RWX storage (every
-chat pod mounts the same volume and isolates via its chat directory):
+isolation you can run **one pod per chat**. Two per-chat strategies are available:
+
+- `perChat` — one shared RWX PVC for the whole cluster; each user gets a `subPath`.
+- `perUserPerChat` — a **dedicated RWX PVC per user**, shared by that user's chat pods.
+
+In both per-chat modes each chat (identified by `X-Session-Id`) gets its own pod and its
+own working directory `<mount>/<chatid>` on the volume.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `podMode` | `perUser` | `perUser` (one pod per user) or `perChat` (one pod per chat; requires `storage.mode: shared`) |
-| `maxPodsPerUser` | `5` | Max concurrent terminal pods per user in `perChat` mode (the user's oldest pod is evicted; `0` = unlimited) |
+| `podMode` | `perUser` | `perUser` (one pod per user), `perChat` (one pod per chat; requires `storage.mode: shared`), or `perUserPerChat` (one pod per chat with a dedicated per-user RWX PVC; requires `storage.mode: perUser`) |
+| `maxPodsPerUser` | `5` | Max concurrent terminal pods per user in per-chat modes (the user's oldest pod is evicted; `0` = unlimited) |
 | `chatPodIdleTimeoutSeconds` | `300` | Idle timeout for per-chat pods (users switching chats frequently won't accumulate pods) |
 
 ```yaml
-# Enable pod-per-chat with shared RWX storage
+# Option A: pod-per-chat on a single shared RWX volume
 storage:
   mode: shared
 podMode: perChat
 chatPodIdleTimeoutSeconds: 300
+
+# Option B: pod-per-chat with a dedicated RWX PVC per user
+storage:
+  mode: perUser
+podMode: perUserPerChat
 ```
 
-> **Note:** `podMode: perChat` requires `storage.mode: shared` (ReadWriteMany); the proxy
-> refuses to start otherwise. Per-chat isolation also requires the client to send
-> `X-Session-Id`; without it, chats fall back to a single shared directory (and, in
-> `perChat` mode, a single "default" pod per user). `perChat` mode can spawn many pods
-> per user; `maxPodsPerUser` bounds that (evicting the user's oldest pod), and the
-> global `maxConcurrentPods` still applies across all users.
+> **Note:** `perChat` requires `storage.mode: shared`; `perUserPerChat` requires
+> `storage.mode: perUser` (per-user PVCs, created ReadWriteMany so the user's chat pods
+> can mount concurrently). The proxy refuses to start otherwise. Per-chat isolation
+> also requires the client to send `X-Session-Id`; without it, chats fall back to a
+> single shared directory (and a single "default" pod per user). Per-chat modes can
+> spawn many pods per user; `maxPodsPerUser` bounds that (evicting the user's oldest
+> pod), and the global `maxConcurrentPods` still applies across all users.
+>
+> Terminal pods are launched as `open-terminal run --cwd <mount>` (the `run` subcommand
+> is kept because container `args` replace the image `CMD`, not its `ENTRYPOINT`).
 
 ## Integration with Open WebUI
 

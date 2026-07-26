@@ -78,7 +78,7 @@ class PodManager:
                         pod_name=pod.metadata.name,
                         service_name=f"terminal-{pod_key}",
                         secret_name=secret_name,
-                        pvc_name=f"pvc-{pod_key}"
+                        pvc_name=f"pvc-{user_hash}"
                         if self.cfg.storage_mode == StorageMode.PER_USER
                         else None,
                         api_key=api_key,
@@ -111,10 +111,33 @@ class PodManager:
     def _generate_api_key(self) -> str:
         return secrets.token_urlsafe(32)
 
+    def _handle_pvc_on_remove(self, terminal: TerminalPod) -> None:
+        """Touch (retain) or delete the per-user PVC when a pod is removed.
+
+        In perUserPerChat mode the PVC is shared across the user's chat pods, so it
+        is only deleted once the user's last chat pod goes away.
+        """
+        if not terminal.pvc_name or self.cfg.storage_mode != StorageMode.PER_USER:
+            return
+        sibling_exists = any(
+            t is not terminal and t.user_hash == terminal.user_hash
+            for t in self._pods.values()
+        )
+        keep = self.cfg.storage_retain_pvc or (
+            self.cfg.pod_mode == PodMode.PER_USER_PER_CHAT and sibling_exists
+        )
+        try:
+            if keep:
+                storage_manager.touch_pvc(terminal.pvc_name)
+            else:
+                storage_manager.delete_user_pvc(terminal.pvc_name)
+        except Exception as e:
+            logger.warning(f"Failed to update PVC {terminal.pvc_name}: {e}")
+
     async def get_or_create(self, user_id: str, chat_id: str | None = None) -> TerminalPod:
         """Get or create a terminal pod for the given user (and chat, in perChat mode)."""
         user_hash = TerminalPod.create(user_id, "").user_hash
-        per_chat = self.cfg.pod_mode == PodMode.PER_CHAT and bool(chat_id)
+        per_chat = self.cfg.pod_mode in (PodMode.PER_CHAT, PodMode.PER_USER_PER_CHAT) and bool(chat_id)
         pod_key = f"{user_hash}-{chat_id_to_hash(chat_id)}" if per_chat else user_hash  # type: ignore[arg-type]
 
         async with self._lock:
@@ -127,11 +150,9 @@ class PodManager:
                 return terminal
 
             if terminal:
-                if terminal.pvc_name:
-                    if not self.cfg.storage_retain_pvc:
-                        storage_manager.delete_user_pvc(terminal.pvc_name)
-                    else:
-                        storage_manager.touch_pvc(terminal.pvc_name)
+                # Reuse the leftover secret/service via the idempotent create path below;
+                # only the stale pod is removed. PVC is refcounted for perUserPerChat.
+                self._handle_pvc_on_remove(terminal)
                 k8s_client.delete_pod(terminal.pod_name)
                 del self._pods[pod_key]
 
@@ -154,6 +175,9 @@ class PodManager:
             terminal = TerminalPod.create(
                 user_id, self._generate_api_key(), chat_id if per_chat else None
             )
+            # perUserPerChat: per-chat pod backed by a dedicated per-user RWX PVC.
+            if self.cfg.pod_mode == PodMode.PER_USER_PER_CHAT:
+                terminal.pvc_name = f"pvc-{user_hash}"
             # Skip PVC creation
             if self.cfg.storage_mode == StorageMode.NONE:
                 terminal.pvc_name = None
@@ -180,14 +204,33 @@ class PodManager:
                 shared_pvc_node=shared_pvc_node,
             )
 
-            k8s_client.create_secret(secret_manifest)
-            logger.info(f"Created secret {terminal.secret_name} for user {terminal.user_hash}")
+            # Secret (idempotent): reuse a leftover from a removed pod, adopting its key.
+            _, secret_created = k8s_client.create_or_get_secret(secret_manifest)
+            if secret_created:
+                logger.info(f"Created secret {terminal.secret_name} for user {terminal.user_hash}")
+            else:
+                terminal.api_key = self._get_api_key_from_secret(terminal.secret_name)
+                logger.info(f"Reusing existing secret {terminal.secret_name}")
 
-            k8s_client.create_pod(pod_manifest)
-            logger.info(f"Created pod {terminal.pod_name} for user {terminal.user_hash}")
+            # Pod (self-healing): adopt a live leftover, else remove a dead one and (re)create.
+            existing_pod = k8s_client.get_pod(terminal.pod_name)
+            live_phase = (
+                existing_pod.status.phase
+                if existing_pod is not None and existing_pod.status is not None
+                else None
+            )
+            if live_phase in ("Pending", "Running"):
+                logger.info(f"Adopting live pod {terminal.pod_name} (phase={live_phase})")
+            else:
+                if existing_pod is not None:
+                    logger.info(f"Removing dead leftover pod {terminal.pod_name}")
+                    k8s_client.delete_pod(terminal.pod_name)
+                k8s_client.create_pod(pod_manifest)
+                logger.info(f"Created pod {terminal.pod_name} for user {terminal.user_hash}")
 
-            k8s_client.create_service(service_manifest)
-            logger.info(f"Created service {terminal.service_name} for user {terminal.user_hash}")
+            # Service (idempotent).
+            k8s_client.create_or_get_service(service_manifest)
+            logger.info(f"Ensured service {terminal.service_name} for user {terminal.user_hash}")
 
             ready, pod_ip = await k8s_client.wait_for_pod_ready(
                 terminal.pod_name,
@@ -250,17 +293,7 @@ class PodManager:
         except Exception as e:
             logger.warning(f"Failed to delete secret {terminal.secret_name}: {e}")
 
-        if terminal.pvc_name and self.cfg.storage_mode == StorageMode.PER_USER:
-            if self.cfg.storage_retain_pvc:
-                try:
-                    storage_manager.touch_pvc(terminal.pvc_name)
-                except Exception as e:
-                    logger.warning(f"Failed to touch PVC {terminal.pvc_name}: {e}")
-            else:
-                try:
-                    storage_manager.delete_user_pvc(terminal.pvc_name)
-                except Exception as e:
-                    logger.warning(f"Failed to delete PVC {terminal.pvc_name}: {e}")
+        self._handle_pvc_on_remove(terminal)
 
     async def _cleanup_loop(self) -> None:
         while True:

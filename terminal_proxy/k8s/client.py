@@ -195,6 +195,19 @@ class K8sClient:
         """Create a Service from the given manifest."""
         return self.core_v1.create_namespaced_service(self.namespace, service_manifest)
 
+    def create_or_get_service(self, service_manifest: dict[str, Any]) -> Any:
+        """Create a Service, returning the existing one on HTTP 409 (idempotent)."""
+        name = service_manifest["metadata"]["name"]
+        try:
+            return self.core_v1.create_namespaced_service(self.namespace, service_manifest)
+        except ApiException as e:
+            if e.status != 409:
+                raise
+        try:
+            return self.core_v1.read_namespaced_service(name, self.namespace)
+        except ApiException:
+            return None
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
@@ -233,6 +246,23 @@ class K8sClient:
     def create_secret(self, secret_manifest: dict[str, Any]) -> V1Secret:
         """Create a secret from the given manifest."""
         return self.core_v1.create_namespaced_secret(self.namespace, secret_manifest)
+
+    def create_or_get_secret(self, secret_manifest: dict[str, Any]) -> tuple[V1Secret, bool]:
+        """Create a Secret, or return ``(existing, False)`` on HTTP 409 (idempotent).
+
+        On reuse the caller should adopt the secret's stored api key so proxy<->pod
+        auth stays consistent.
+        """
+        name = secret_manifest["metadata"]["name"]
+        try:
+            return self.core_v1.create_namespaced_secret(self.namespace, secret_manifest), True
+        except ApiException as e:
+            if e.status != 409:
+                raise
+            existing = self.get_secret(name)
+            if existing is None:
+                raise
+            return existing, False
 
     @retry(
         stop=stop_after_attempt(3),
