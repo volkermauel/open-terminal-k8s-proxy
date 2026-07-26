@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,13 @@ class StorageMode(str, Enum):
     PER_USER = "perUser"
     SHARED = "shared"
     SHARED_RWO = "sharedRWO"
+
+
+class PodMode(str, Enum):
+    """Terminal pod provisioning mode."""
+
+    PER_USER = "perUser"
+    PER_CHAT = "perChat"
 
 
 class Settings(BaseSettings):
@@ -114,6 +121,22 @@ class Settings(BaseSettings):
         default=60,
         description="Interval between idle pod cleanup scans.",
     )
+    data_mount_path: str = Field(
+        default="/data",
+        description="Mount path (and HOME / --cwd target) for terminal pod data volumes.",
+    )
+    pod_mode: PodMode = Field(
+        default=PodMode.PER_USER,
+        description="Pod provisioning mode: perUser (one pod per user) or perChat (one pod per chat).",
+    )
+    chat_pod_idle_timeout_seconds: int = Field(
+        default=300,
+        description="Seconds of inactivity before terminating a per-chat terminal pod.",
+    )
+    per_chat_dirs_enabled: bool = Field(
+        default=True,
+        description="Create a per-chat working directory under the data mount for each X-Session-Id.",
+    )
 
     labels_app: str = Field(
         default="open-terminal-user", description="App label for terminal pods."
@@ -132,6 +155,16 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """Parse CORS allowed origins into a list."""
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _validate_pod_mode_storage(self) -> Settings:
+        """perChat mode requires shared RWX storage (every chat pod mounts the same volume)."""
+        if self.pod_mode == PodMode.PER_CHAT and self.storage_mode != StorageMode.SHARED:
+            raise ValueError(
+                "podMode 'perChat' requires storage.mode 'shared' (ReadWriteMany). "
+                "Set storage.mode=shared before enabling podMode=perChat."
+            )
+        return self
 
 
 settings = Settings()

@@ -78,6 +78,17 @@ maxConcurrentPods: 100
 podIdleTimeoutSeconds: 3600
 podStartupTimeoutSeconds: 60
 podCleanupIntervalSeconds: 60
+terminal:
+  # Path the PVC is mounted at and used as --cwd / HOME for terminal pods.
+  dataMountPath: /data
+# Pod provisioning: perUser (default, one pod per user) or perChat (one pod per
+# # chat; requires storage.mode=shared for shared RWX storage).
+podMode: perUser
+# Seconds of inactivity before terminating a per-chat terminal pod.
+chatPodIdleTimeoutSeconds: 300
+# Create a per-chat working directory under the data mount for each X-Session-Id.
+perChatDirs:
+  enabled: true
 
 secret:
   create: true

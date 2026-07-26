@@ -18,7 +18,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from terminal_proxy import __version__
-from terminal_proxy.config import settings
+from terminal_proxy.chat_bootstrap import ensure_chat_dir
+from terminal_proxy.config import PodMode, settings
 from terminal_proxy.metrics import format_prometheus_metrics, record_request, update_pod_states
 from terminal_proxy.models import K8sUnavailableError, PodState, TerminalPod
 from terminal_proxy.pod_manager import pod_manager
@@ -110,6 +111,11 @@ def extract_user_id(request: Request) -> str:
     return user_id
 
 
+def extract_chat_id(request: Request) -> str | None:
+    """Extract the chat/session id from the X-Session-Id header, if present."""
+    return request.headers.get("X-Session-Id")
+
+
 def ensure_k8s_available() -> None:
     """Ensure Kubernetes API is available, raise K8sUnavailableError if not."""
     from terminal_proxy.k8s.client import k8s_client
@@ -121,14 +127,14 @@ def ensure_k8s_available() -> None:
             raise K8sUnavailableError(f"Kubernetes API initialization failed: {e}") from e
 
 
-async def get_terminal_for_user(user_id: str) -> TerminalPod:
+async def get_terminal_for_user(user_id: str, chat_id: str | None = None) -> TerminalPod:
     """Get or create terminal pod with graceful error handling."""
     from kubernetes.client.rest import ApiException
 
     ensure_k8s_available()
 
     try:
-        terminal = await pod_manager.get_or_create(user_id)
+        terminal = await pod_manager.get_or_create(user_id, chat_id)
         if terminal.state != PodState.RUNNING:
             raise HTTPException(status_code=503, detail="Terminal not ready")
         return terminal
@@ -343,7 +349,7 @@ async def get_status() -> dict[str, Any]:
 )
 async def proxy_system(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Return the terminal pod's LLM system prompt (if enabled)."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(f"{terminal.endpoint}/system", request, terminal.api_key)
 
 
@@ -355,7 +361,7 @@ async def proxy_system(request: Request, user_id: str = Depends(extract_user_id)
 )
 async def proxy_info(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Return operator-provided environment info from the terminal pod."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(f"{terminal.endpoint}/info", request, terminal.api_key)
 
 
@@ -366,7 +372,7 @@ async def proxy_info(request: Request, user_id: str = Depends(extract_user_id)) 
 )
 async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Get current working directory."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/files/cwd"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
@@ -379,7 +385,7 @@ async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> 
 )
 async def set_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Set current working directory."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/files/cwd"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
@@ -397,7 +403,7 @@ async def proxy_files_list(
     ),
 ) -> Response:
     """Return a structured listing of files and directories at the given path."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/list", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -418,7 +424,7 @@ async def proxy_files_read(
     ),
 ) -> Response:
     """Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). For text files you can optionally request a specific line range. Images are returned as binary so you can view and analyze them directly. Use display to show a file to the user."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/read", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -431,7 +437,7 @@ async def proxy_files_display(
     path: str = Query(..., description="Path to the file to display."),
 ) -> Response:
     """Open a file in the user's file viewer so they can see it. Use this when the user wants to view or look at a file. This does not return file content to you — use read if you need to read the content yourself."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/display", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -444,7 +450,7 @@ async def proxy_files_write(
     user_id: str = Depends(extract_user_id),
 ) -> Response:
     """Write text content to a file. Creates parent directories automatically. Overwrites if the file already exists."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/write", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -457,7 +463,7 @@ async def proxy_files_replace(
     user_id: str = Depends(extract_user_id),
 ) -> Response:
     """Find and replace exact strings in a file. Supports multiple replacements in one call with optional line range narrowing."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/replace", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -484,7 +490,7 @@ async def proxy_files_grep(
     max_results: int | None = Query(None, description="Maximum number of matches to return."),
 ) -> Response:
     """Search for a text pattern across files in a directory. Returns structured matches with file paths, line numbers, and matching lines. Skips binary files."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/grep", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -503,7 +509,7 @@ async def proxy_files_glob(
     max_results: int | None = Query(None, description="Maximum number of matches to return."),
 ) -> Response:
     """Search for files and subdirectories by name within a specified directory using glob patterns. Results will include the relative path, type, size, and modification time."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/glob", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -521,7 +527,7 @@ async def proxy_files(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy file operations to terminal pod."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/files/{path}"
     if request.query_params:
@@ -538,7 +544,7 @@ async def proxy_execute_list(
     user_id: str = Depends(extract_user_id),
 ) -> Response:
     """List running commands. Returns a list of all tracked background processes, including running, done, and killed."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/execute"
     if request.query_params:
@@ -562,7 +568,7 @@ async def proxy_execute(
     ),
 ) -> Response:
     """Execute a shell command. Run a command in the background and return a command ID. This gives you full Linux shell access: you can run any command including file operations (rm, cp, mv, mkdir, cat, grep, find, etc.), install packages, run scripts, and chain commands with &&, ||, ;, and pipes. Use this for operations not covered by dedicated file endpoints, such as deleting files (rm), moving/renaming (mv), or any other shell task."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/execute"
     if request.query_params:
@@ -583,7 +589,7 @@ async def proxy_process_status(
     user_id: str = Depends(extract_user_id),
 ) -> Response:
     """Poll a running command for new output and status."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/execute/{process_id}/status"
     if request.query_params:
@@ -604,7 +610,7 @@ async def proxy_process_input(
     user_id: str = Depends(extract_user_id),
 ) -> Response:
     """Send stdin input to a running command."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/execute/{process_id}/input"
     if request.query_params:
@@ -625,7 +631,7 @@ async def proxy_process_kill(
     user_id: str = Depends(extract_user_id),
 ) -> Response:
     """Kill a running command (SIGTERM, or force=true for SIGKILL)."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/execute/{process_id}"
     if request.query_params:
@@ -647,7 +653,7 @@ async def proxy_execute_process(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Manage a running command process. Use GET /execute/{process_id}/status to poll output and check if finished. Use POST /execute/{process_id}/input to send stdin. Use DELETE /execute/{process_id} to kill (SIGTERM, or force=true for SIGKILL)."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/execute/{process_id}/{path}"
     if request.query_params:
@@ -663,7 +669,7 @@ async def proxy_ports(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy port listing requests."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/ports"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
@@ -678,7 +684,7 @@ async def proxy_port_forward(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy port forwarding requests."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/proxy/{port}/{path}"
     if request.query_params:
@@ -694,7 +700,19 @@ async def proxy_terminals(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy terminal session management."""
-    terminal = await get_terminal_for_user(user_id)
+    chat_id = extract_chat_id(request)
+    terminal = await get_terminal_for_user(user_id, chat_id)
+
+    # perUser mode: ensure a per-chat working directory before the terminal is
+    # created (open-terminal seeds the new session's cwd from it). In perChat
+    # mode the pod is already launched in its chat dir, so no bootstrap is needed.
+    if (
+        request.method == "POST"
+        and settings.pod_mode != PodMode.PER_CHAT
+        and chat_id
+        and settings.per_chat_dirs_enabled
+    ):
+        await ensure_chat_dir(terminal, chat_id, settings)
 
     target_url = f"{terminal.endpoint}/api/terminals"
     if request.query_params:
@@ -711,7 +729,7 @@ async def proxy_terminal_session(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy terminal session operations."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/api/terminals/{session_id}"
     if request.query_params:
@@ -746,7 +764,7 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
         return
 
     try:
-        terminal = await get_terminal_for_user(user_id)
+        terminal = await get_terminal_for_user(user_id, client_ws.headers.get("x-session-id"))
     except K8sUnavailableError as e:
         await client_ws.close(code=1011, reason=f"Internal Error: {e}")
         return
@@ -772,7 +790,7 @@ async def proxy_notebooks(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy notebook session creation requests to the terminal pod."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/notebooks"
     if request.query_params:
@@ -793,7 +811,7 @@ async def proxy_notebooks_session(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy notebook session operations (execute, get, delete) to the terminal pod."""
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
 
     target_url = f"{terminal.endpoint}/notebooks/{path}"
     if request.query_params:
@@ -817,7 +835,7 @@ async def proxy_desktop_status(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -835,7 +853,7 @@ async def proxy_desktop_start(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop/start", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -853,7 +871,7 @@ async def proxy_desktop_stop(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop/stop", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -875,7 +893,7 @@ async def proxy_desktop_screenshot(
         description="Set to 'raw' for binary PNG response. Default is base64 JSON.",
     ),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     target_url = f"{terminal.endpoint}/desktop/screenshot"
     if request.query_params:
         target_url += f"?{request.query_params}"
@@ -896,7 +914,7 @@ async def proxy_desktop_click(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop/click", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -914,7 +932,7 @@ async def proxy_desktop_mouse_move(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop/mouse_move",
         request,
@@ -935,7 +953,7 @@ async def proxy_desktop_drag(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop/drag", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -953,7 +971,7 @@ async def proxy_desktop_type(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop/type", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -971,7 +989,7 @@ async def proxy_desktop_key(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop/key", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -989,7 +1007,7 @@ async def proxy_desktop_scroll(
     request: Request,
     user_id: str = Depends(extract_user_id),
 ) -> Response:
-    terminal = await get_terminal_for_user(user_id)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/desktop/scroll", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -1021,7 +1039,7 @@ async def websocket_desktop_vnc(client_ws: WebSocket) -> None:
         return
 
     try:
-        terminal = await get_terminal_for_user(user_id)
+        terminal = await get_terminal_for_user(user_id, client_ws.headers.get("x-session-id"))
     except K8sUnavailableError as e:
         await client_ws.close(code=1011, reason=f"Internal Error: {e}")
         return
