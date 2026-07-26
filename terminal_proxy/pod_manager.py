@@ -68,7 +68,9 @@ class PodManager:
 
                 if pod.status.phase == "Running":
                     secret_name = f"terminal-secret-{pod_key}"
-                    api_key = self._get_api_key_from_secret(secret_name)
+                    api_key = self._api_key_from_pod(pod) or self._get_api_key_from_secret(
+                        secret_name
+                    )
 
                     terminal = TerminalPod(
                         user_id=user_hash,
@@ -108,6 +110,33 @@ class PodManager:
         logger.warning(f"Secret {secret_name} not found or invalid, generated new key")
         return new_key
 
+    def _api_key_from_pod(self, pod: Any) -> str | None:
+        """Read the api key from the secret the pod actually mounts.
+
+        Robust against naming drift / eviction races: a running pod's key is whatever
+        secret its container env referenced at startup, which may differ from the
+        name-derived secret after a recreate.
+        """
+        import base64
+
+        try:
+            for container in pod.spec.containers or []:
+                for env in container.env or []:
+                    if getattr(env, "name", "") != "OPEN_TERMINAL_API_KEY":
+                        continue
+                    vf = getattr(env, "value_from", None)
+                    skr = getattr(vf, "secret_key_ref", None) if vf else None
+                    if not skr:
+                        continue
+                    secret = k8s_client.get_secret(getattr(skr, "name", ""))
+                    if secret and secret.data:
+                        raw = secret.data.get(getattr(skr, "key", "api-key"))
+                        if raw:
+                            return base64.b64decode(raw).decode()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to read api key from pod spec: %s", e)
+        return None
+
     def _generate_api_key(self) -> str:
         return secrets.token_urlsafe(32)
 
@@ -120,8 +149,7 @@ class PodManager:
         if not terminal.pvc_name or self.cfg.storage_mode != StorageMode.PER_USER:
             return
         sibling_exists = any(
-            t is not terminal and t.user_hash == terminal.user_hash
-            for t in self._pods.values()
+            t is not terminal and t.user_hash == terminal.user_hash for t in self._pods.values()
         )
         keep = self.cfg.storage_retain_pvc or (
             self.cfg.pod_mode == PodMode.PER_USER_PER_CHAT and sibling_exists
@@ -134,10 +162,42 @@ class PodManager:
         except Exception as e:
             logger.warning(f"Failed to update PVC {terminal.pvc_name}: {e}")
 
+    def _pod_key(self, user_id: str, chat_id: str | None) -> str:
+        """Composite tracking key for (user, chat)."""
+        user_hash = TerminalPod.create(user_id, "").user_hash
+        per_chat = self.cfg.pod_mode in (PodMode.PER_CHAT, PodMode.PER_USER_PER_CHAT) and bool(
+            chat_id
+        )
+        return f"{user_hash}-{chat_id_to_hash(chat_id)}" if per_chat else user_hash  # type: ignore[arg-type]
+
+    async def lookup(self, user_id: str, chat_id: str | None = None) -> TerminalPod | None:
+        """Return the running pod for (user, chat) if tracked, else None.
+
+        Never creates pods and never bumps last_active_at: polling an absent pod must
+        not recreate it (the source of pod churn in perChat modes).
+        """
+        pod_key = self._pod_key(user_id, chat_id)
+        terminal = self._pods.get(pod_key)
+        if terminal and terminal.state == PodState.RUNNING:
+            return terminal
+        return None
+
+    def acquire(self, terminal: TerminalPod) -> None:
+        """Register an active websocket so the pod is never evicted while in use."""
+        terminal.active_connections += 1
+        terminal.last_active_at = datetime.utcnow()
+
+    def release(self, terminal: TerminalPod) -> None:
+        """Deregister an active websocket from this pod."""
+        if terminal.active_connections > 0:
+            terminal.active_connections -= 1
+
     async def get_or_create(self, user_id: str, chat_id: str | None = None) -> TerminalPod:
         """Get or create a terminal pod for the given user (and chat, in perChat mode)."""
         user_hash = TerminalPod.create(user_id, "").user_hash
-        per_chat = self.cfg.pod_mode in (PodMode.PER_CHAT, PodMode.PER_USER_PER_CHAT) and bool(chat_id)
+        per_chat = self.cfg.pod_mode in (PodMode.PER_CHAT, PodMode.PER_USER_PER_CHAT) and bool(
+            chat_id
+        )
         pod_key = f"{user_hash}-{chat_id_to_hash(chat_id)}" if per_chat else user_hash  # type: ignore[arg-type]
 
         async with self._lock:
@@ -161,9 +221,16 @@ class PodManager:
             if per_chat and self.cfg.max_pods_per_user > 0:
                 user_keys = [k for k, t in self._pods.items() if t.user_hash == user_hash]
                 if len(user_keys) >= self.cfg.max_pods_per_user:
-                    oldest = min(user_keys, key=lambda k: self._pods[k].last_active_at)
+                    # Never evict a pod with an active websocket; only idle ones are candidates.
+                    evictable = [k for k in user_keys if self._pods[k].active_connections == 0]
+                    if not evictable:
+                        raise RuntimeError(
+                            f"Per-user pod cap ({self.cfg.max_pods_per_user}) reached for "
+                            f"{user_hash}; all chat pods have active connections"
+                        )
+                    oldest = min(evictable, key=lambda k: self._pods[k].last_active_at)
                     logger.info(
-                        "Per-user pod cap (%d) reached for %s; evicting oldest chat pod %s",
+                        "Per-user pod cap (%d) reached for %s; evicting oldest idle chat pod %s",
                         self.cfg.max_pods_per_user,
                         user_hash,
                         oldest,
@@ -261,13 +328,19 @@ class PodManager:
             raise
 
     async def _evict_oldest(self) -> None:
-        if not self._pods:
+        # Never evict a pod with an active websocket; only idle/disconnected ones.
+        evictable = [h for h, t in self._pods.items() if t.active_connections == 0]
+        if not evictable:
+            logger.warning(
+                "Global pod cap reached but all %d pods have active connections; deferring",
+                len(self._pods),
+            )
             return
 
-        oldest_hash = min(self._pods.keys(), key=lambda h: self._pods[h].last_active_at)
+        oldest_hash = min(evictable, key=lambda h: self._pods[h].last_active_at)
         oldest = self._pods[oldest_hash]
 
-        logger.info(f"Evicting oldest pod {oldest.pod_name} (user {oldest.user_hash})")
+        logger.info(f"Evicting oldest idle pod {oldest.pod_name} (user {oldest.user_hash})")
         await self._delete_pod(oldest_hash)
 
     async def _delete_pod(self, user_hash: str) -> None:
@@ -310,6 +383,8 @@ class PodManager:
         to_evict = []
 
         for pod_key, terminal in self._pods.items():
+            if terminal.active_connections > 0:
+                continue
             idle_seconds = (now - terminal.last_active_at).total_seconds()
             timeout = (
                 self.cfg.chat_pod_idle_timeout_seconds
