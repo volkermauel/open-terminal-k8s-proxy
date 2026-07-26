@@ -14,22 +14,29 @@ import logging
 
 import httpx
 
-from terminal_proxy.config import Settings
+from terminal_proxy.config import PodMode, Settings
 from terminal_proxy.models import TerminalPod, sanitize_chat_id
 
 logger = logging.getLogger(__name__)
 
 
-async def ensure_chat_dir(terminal: TerminalPod, chat_id: str, cfg: Settings) -> None:
+async def ensure_chat_dir(terminal: TerminalPod, chat_id: str | None, cfg: Settings) -> None:
     """Ensure ``<data_mount_path>/<sanitized-chatid>`` exists and seed it as the session cwd.
 
-    The terminal pod's home is ``cfg.data_mount_path`` (it is launched with
-    ``--cwd <data_mount_path>``), so the chat directory is derived directly -- no
-    round-trip to discover it. Calls the terminal pod's ``POST /files/mkdir``
-    (idempotent), then ``POST /files/cwd`` keyed by the ``X-Session-Id`` header.
-    Best-effort: failures are logged but never break terminal creation.
+    Cached per (terminal pod, chat_id): open-terminal keeps the session cwd in an
+    in-memory dict keyed by the ``X-Session-Id`` header, so once we have mkdir'd the
+    chat dir and bound it to the session we need not repeat the two calls on every
+    request. The cache lives on the ``TerminalPod`` and is cleared when the pod is
+    (re)created or its container restart_count increases (see
+    ``PodManager._check_pod_health``), matching the lifetime of the upstream store.
+
+    perChat pods are launched directly in their chat dir (``--cwd``), so they are
+    skipped. Best-effort: a failed ``set_cwd`` is not cached so the next request
+    retries; failures never break terminal creation.
     """
-    if not cfg.per_chat_dirs_enabled or not chat_id:
+    if cfg.pod_mode == PodMode.PER_CHAT or not cfg.per_chat_dirs_enabled or not chat_id:
+        return
+    if chat_id in terminal.bootstrapped_chats:
         return
 
     slug = sanitize_chat_id(chat_id)
@@ -56,5 +63,8 @@ async def ensure_chat_dir(terminal: TerminalPod, chat_id: str, cfg: Settings) ->
                 logger.warning(
                     "ensure_chat_dir: set cwd %s -> %s %s", chat_dir, resp.status_code, resp.text
                 )
+            else:
+                # Only cache on a successful set_cwd so a transient failure retries.
+                terminal.bootstrapped_chats.add(chat_id)
         except Exception as e:  # noqa: BLE001
             logger.warning("ensure_chat_dir: set cwd %s failed: %s", chat_dir, e)
