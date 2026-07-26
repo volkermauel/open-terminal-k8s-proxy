@@ -417,12 +417,35 @@ class PodManager:
 
             try:
                 pod = k8s_client.get_pod(terminal.pod_name)
-                if pod is None or pod.status.phase in ("Failed", "Unknown"):
+                status = pod.status if pod is not None else None
+                if status is None or status.phase in ("Failed", "Unknown"):
                     logger.warning(f"Pod {terminal.pod_name} is unhealthy, marking for removal")
                     to_remove.append(user_hash)
-                elif pod.status.phase == "Running" and pod.status.pod_ip != terminal.pod_ip:
-                    terminal.pod_ip = pod.status.pod_ip
-                    logger.info(f"Updated pod {terminal.pod_name} IP to {terminal.pod_ip}")
+                elif status.phase == "Running":
+                    # A container restart or pod recreation wipes the upstream
+                    # in-memory session cwd, so invalidate our per-chat cache.
+                    restarts = 0
+                    statuses = status.container_statuses or []
+                    if statuses:
+                        restarts = statuses[0].restart_count or 0
+                    if (
+                        terminal.container_restart_count
+                        and restarts > terminal.container_restart_count
+                    ):
+                        logger.info(
+                            f"Pod {terminal.pod_name} container restarted "
+                            f"({terminal.container_restart_count} -> {restarts}); "
+                            "clearing chat-dir cache"
+                        )
+                        terminal.bootstrapped_chats.clear()
+                    terminal.container_restart_count = restarts
+                    if status.pod_ip and status.pod_ip != terminal.pod_ip:
+                        terminal.pod_ip = status.pod_ip
+                        terminal.bootstrapped_chats.clear()
+                        logger.info(
+                            f"Updated pod {terminal.pod_name} IP to {terminal.pod_ip} "
+                            "(chat-dir cache cleared)"
+                        )
             except Exception as e:
                 logger.warning(f"Failed to check health of pod {terminal.pod_name}: {e}")
 

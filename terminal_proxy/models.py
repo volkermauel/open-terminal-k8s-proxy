@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -77,6 +77,12 @@ class TerminalPod:
     chat_id: str | None = None
     chat_hash: str | None = None
     active_connections: int = 0
+    # Per-chat session-cwd bootstrap cache. Upstream open-terminal stores the
+    # session cwd in an in-memory dict keyed by X-Session-Id, which is wiped on
+    # container restart, so this cache is cleared by PodManager when the pod is
+    # (re)created or its container restart_count increases.
+    bootstrapped_chats: set[str] = field(default_factory=set)
+    container_restart_count: int = 0
 
     @property
     def endpoint(self) -> str:
