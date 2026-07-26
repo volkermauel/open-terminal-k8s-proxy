@@ -102,3 +102,56 @@ async def test_ensure_chat_dir_is_idempotent_and_best_effort() -> None:
     with ctx:
         await ensure_chat_dir(_terminal(), "chat-1", cfg)
     assert client.post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_dir_cached_skips_repeat_call() -> None:
+    """Second call for the same (pod, chat) hits the cache and skips the HTTP calls."""
+    cfg = Settings(proxy_api_key="k", storage_mode=StorageMode.PER_USER)
+    client, ctx = _patch_client()
+    terminal = _terminal()
+    with ctx:
+        await ensure_chat_dir(terminal, "chat-1", cfg)
+        await ensure_chat_dir(terminal, "chat-1", cfg)  # cached -> skipped
+    assert client.post.call_count == 2  # only the first call hit the pod
+    assert "chat-1" in terminal.bootstrapped_chats
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_dir_cache_is_per_chat() -> None:
+    """Each distinct chat_id is bootstrapped once; repeats are served from cache."""
+    cfg = Settings(proxy_api_key="k", storage_mode=StorageMode.PER_USER)
+    client, ctx = _patch_client()
+    terminal = _terminal()
+    with ctx:
+        await ensure_chat_dir(terminal, "chat-a", cfg)
+        await ensure_chat_dir(terminal, "chat-b", cfg)
+        await ensure_chat_dir(terminal, "chat-a", cfg)  # cached
+    assert client.post.call_count == 4  # 2 calls per distinct chat
+    assert {"chat-a", "chat-b"} <= set(terminal.bootstrapped_chats)
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_dir_perchat_mode_is_noop() -> None:
+    """perChat pods are launched in their chat dir; bootstrap must not call the pod."""
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(proxy_api_key="k", storage_mode=StorageMode.SHARED, pod_mode=PodMode.PER_CHAT)
+    with patch("terminal_proxy.chat_bootstrap.httpx.AsyncClient") as mc:
+        await ensure_chat_dir(_terminal(), "chat-1", cfg)
+        mc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_dir_failed_setcwd_is_not_cached() -> None:
+    """A failed set_cwd must not be cached so the next request retries."""
+    cfg = Settings(proxy_api_key="k", storage_mode=StorageMode.PER_USER)
+    client, ctx = _patch_client()
+    # call 1: mkdir 200, set_cwd 500 -> not cached; call 2: mkdir 200, set_cwd 200 -> cached
+    client.post = AsyncMock(side_effect=[_resp(200), _resp(500), _resp(200), _resp(200)])
+    terminal = _terminal()
+    with ctx:
+        await ensure_chat_dir(terminal, "chat-1", cfg)
+        await ensure_chat_dir(terminal, "chat-1", cfg)  # retries: first call did not cache
+    assert client.post.call_count == 4
+    assert "chat-1" in terminal.bootstrapped_chats

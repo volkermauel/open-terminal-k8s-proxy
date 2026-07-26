@@ -152,6 +152,11 @@ async def _create_terminal_for_user(user_id: str, chat_id: str | None = None) ->
         terminal = await pod_manager.get_or_create(user_id, chat_id)
         if terminal.state != PodState.RUNNING:
             raise HTTPException(status_code=503, detail="Terminal not ready")
+        # Implicit per-chat cwd bootstrap: runs on every request that resolves a
+        # terminal (POST /api/terminals AND every perUser read), cached per
+        # (pod, chat) so it is ~free after the first call. Must precede the PTY
+        # spawn so open-terminal seeds the new session's cwd from it.
+        await ensure_chat_dir(terminal, chat_id, settings)
         return terminal
     except ApiException as e:
         logger.error(f"K8s API error getting terminal for user {user_id}: {e}")
@@ -721,16 +726,8 @@ async def proxy_terminals(
     else:
         terminal = await get_terminal_for_user(user_id, chat_id)
 
-    # perUser mode: ensure a per-chat working directory before the terminal is
-    # created (open-terminal seeds the new session's cwd from it). In perChat
-    # mode the pod is already launched in its chat dir, so no bootstrap is needed.
-    if (
-        request.method == "POST"
-        and settings.pod_mode != PodMode.PER_CHAT
-        and chat_id
-        and settings.per_chat_dirs_enabled
-    ):
-        await ensure_chat_dir(terminal, chat_id, settings)
+    # Per-chat cwd bootstrap now happens inside _create_terminal_for_user (covers
+    # POST and every perUser read), so the session cwd is set before the PTY spawns.
 
     target_url = f"{terminal.endpoint}/api/terminals"
     if request.query_params:

@@ -847,3 +847,75 @@ async def test_reconcile_reads_api_key_from_pod_referenced_secret(mock_k8s_clien
     t = pm._pods["abc123-def456"]
     assert t.api_key == "actual-key"
     mock_k8s_client.get_secret.assert_called_with("actual-secret")
+
+
+# ---------------------------------------------------------------------------
+# Per-chat cwd bootstrap cache invalidation (PodManager._check_pod_health)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_check_clears_cache_on_container_restart(pod_manager, mock_k8s_client):
+    """A container restartCount increase wipes the cached session cwd (wiped upstream)."""
+    terminal = TerminalPod.create("user-1", "key")
+    terminal.state = PodState.RUNNING
+    terminal.pod_ip = "10.0.0.1"
+    terminal.container_restart_count = 2  # already baselined by a prior health check
+    terminal.bootstrapped_chats = {"chat-1", "chat-2"}
+
+    restarted = MagicMock()
+    restarted.status.phase = "Running"
+    restarted.status.pod_ip = "10.0.0.1"  # same IP -- only the restart changed
+    restarted.status.container_statuses = [MagicMock(restart_count=3)]
+
+    mock_k8s_client.get_pod.return_value = restarted
+    pod_manager._pods["abc123"] = terminal
+
+    await pod_manager._check_pod_health()
+
+    assert terminal.bootstrapped_chats == set()  # cache invalidated
+    assert terminal.container_restart_count == 3
+
+
+@pytest.mark.asyncio
+async def test_health_check_clears_cache_on_pod_ip_change(pod_manager, mock_k8s_client):
+    """A pod recreation (new IP) invalidates the cache even when restartCount is 0."""
+    terminal = TerminalPod.create("user-1", "key")
+    terminal.state = PodState.RUNNING
+    terminal.pod_ip = "10.0.0.1"
+    terminal.bootstrapped_chats = {"chat-1"}
+
+    recreated = MagicMock()
+    recreated.status.phase = "Running"
+    recreated.status.pod_ip = "10.0.0.99"  # new IP signals recreation
+    recreated.status.container_statuses = [MagicMock(restart_count=0)]
+
+    mock_k8s_client.get_pod.return_value = recreated
+    pod_manager._pods["abc123"] = terminal
+
+    await pod_manager._check_pod_health()
+
+    assert terminal.bootstrapped_chats == set()
+    assert terminal.pod_ip == "10.0.0.99"
+
+
+@pytest.mark.asyncio
+async def test_health_check_preserves_cache_when_stable(pod_manager, mock_k8s_client):
+    """No restart and unchanged IP -> cache and restart baseline are left untouched."""
+    terminal = TerminalPod.create("user-1", "key")
+    terminal.state = PodState.RUNNING
+    terminal.pod_ip = "10.0.0.1"
+    terminal.bootstrapped_chats = {"chat-1"}
+
+    stable = MagicMock()
+    stable.status.phase = "Running"
+    stable.status.pod_ip = "10.0.0.1"
+    stable.status.container_statuses = [MagicMock(restart_count=0)]
+
+    mock_k8s_client.get_pod.return_value = stable
+    pod_manager._pods["abc123"] = terminal
+
+    await pod_manager._check_pod_health()
+
+    assert terminal.bootstrapped_chats == {"chat-1"}  # preserved
+    assert terminal.container_restart_count == 0
