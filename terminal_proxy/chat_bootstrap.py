@@ -20,7 +20,9 @@ from terminal_proxy.models import TerminalPod, sanitize_chat_id
 logger = logging.getLogger(__name__)
 
 
-async def ensure_chat_dir(terminal: TerminalPod, chat_id: str | None, cfg: Settings) -> None:
+async def ensure_chat_dir(
+    terminal: TerminalPod, chat_id: str | None, cfg: Settings, *, force: bool = False
+) -> None:
     """Ensure ``<data_mount_path>/<sanitized-chatid>`` exists and seed it as the session cwd.
 
     Cached per (terminal pod, chat_id): open-terminal keeps the session cwd in an
@@ -33,10 +35,12 @@ async def ensure_chat_dir(terminal: TerminalPod, chat_id: str | None, cfg: Setti
     perChat pods are launched directly in their chat dir (``--cwd``), so they are
     skipped. Best-effort: a failed ``set_cwd`` is not cached so the next request
     retries; failures never break terminal creation.
+    ``force=True`` (terminal creation) skips the cache so a chat dir deleted
+    mid-session is recreated before the PTY spawns.
     """
     if cfg.pod_mode == PodMode.PER_CHAT or not cfg.per_chat_dirs_enabled or not chat_id:
         return
-    if chat_id in terminal.bootstrapped_chats:
+    if not force and chat_id in terminal.bootstrapped_chats:
         return
 
     slug = sanitize_chat_id(chat_id)

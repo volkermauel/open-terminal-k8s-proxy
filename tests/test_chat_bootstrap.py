@@ -155,3 +155,18 @@ async def test_ensure_chat_dir_failed_setcwd_is_not_cached() -> None:
         await ensure_chat_dir(terminal, "chat-1", cfg)  # retries: first call did not cache
     assert client.post.call_count == 4
     assert "chat-1" in terminal.bootstrapped_chats
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_dir_force_bypasses_cache() -> None:
+    """force=True re-runs mkdir+set_cwd even when the chat is cached, recreating a
+    chat dir deleted mid-session before the PTY spawns."""
+    cfg = Settings(proxy_api_key="k", storage_mode=StorageMode.PER_USER)
+    client, ctx = _patch_client()
+    terminal = _terminal()
+    with ctx:
+        await ensure_chat_dir(terminal, "chat-1", cfg)              # bootstrap + cache
+        await ensure_chat_dir(terminal, "chat-1", cfg)              # cached -> skipped
+        await ensure_chat_dir(terminal, "chat-1", cfg, force=True)  # forced -> re-runs
+    assert client.post.call_count == 4  # 2 (first) + 0 (cached) + 2 (forced)
+    assert "chat-1" in terminal.bootstrapped_chats
