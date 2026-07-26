@@ -116,7 +116,7 @@ class TerminalPod:
             pod_name=f"terminal-{user_hash}",
             service_name=f"terminal-{user_hash}",
             secret_name=f"terminal-secret-{user_hash}",
-            pvc_name=f"pvc-{user_hash}",
+            pvc_name=f"pvc-{user_hash}",  # used only in PER_USER mode; inert otherwise
             api_key=api_key,
             state=PodState.CREATING,
             created_at=now,

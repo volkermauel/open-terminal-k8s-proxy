@@ -70,6 +70,8 @@ spec:
               value: "{{ .Values.storage.pvcRetentionTtlSeconds | default 0 }}"
             - name: MAX_CONCURRENT_PODS
               value: "{{ .Values.maxConcurrentPods }}"
+            - name: MAX_PODS_PER_USER
+              value: "{{ .Values.maxPodsPerUser }}"
             - name: POD_IDLE_TIMEOUT_SECONDS
               value: "{{ .Values.podIdleTimeoutSeconds }}"
             - name: POD_STARTUP_TIMEOUT_SECONDS

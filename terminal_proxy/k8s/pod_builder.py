@@ -111,7 +111,7 @@ def build_pod_manifest(
         volume_mounts.append(
             {
                 "name": "user-data",
-                "mountPath": "/data",
+                "mountPath": cfg.data_mount_path,
             }
         )
     elif shared_pvc_name:
@@ -123,18 +123,24 @@ def build_pod_manifest(
         )
         mount = {
             "name": "shared-data",
-            "mountPath": "/data",
+            "mountPath": cfg.data_mount_path,
         }
         if shared_sub_path:
             mount["subPath"] = shared_sub_path
         volume_mounts.append(mount)
 
     has_volume = bool(volume_mounts)
-    base_dir = cfg.data_mount_path if has_volume else "/home/user"
-    if terminal_pod.chat_id and terminal_pod.chat_hash:
-        cwd_target = f"{base_dir}/{sanitize_chat_id(terminal_pod.chat_id)}"
-    else:
-        cwd_target = base_dir
+    # Terminal cwd: open inside the mounted data volume so writes reach the PVC.
+    # In `none` mode there is no volume, so we leave open-terminal's image default
+    # (its WORKDIR, e.g. /home/user) untouched -- no --cwd / HOME override.
+    # (open-terminal derives its home from os.getcwd(), not the HOME env var.)
+    cwd_target: str | None = None
+    if has_volume:
+        base_dir = cfg.data_mount_path
+        if terminal_pod.chat_id and terminal_pod.chat_hash:
+            cwd_target = f"{base_dir}/{sanitize_chat_id(terminal_pod.chat_id)}"
+        else:
+            cwd_target = base_dir
 
     env: list[dict[str, Any]] = []
 
@@ -154,7 +160,8 @@ def build_pod_manifest(
 
     env.append(env_var)
 
-    env.append({"name": "HOME", "value": cwd_target})
+    if cwd_target:
+        env.append({"name": "HOME", "value": cwd_target})
 
     container = {
         "name": "terminal",
@@ -174,7 +181,8 @@ def build_pod_manifest(
         },
         "volumeMounts": volume_mounts,
     }
-    container["args"] = ["--cwd", cwd_target]
+    if cwd_target:
+        container["args"] = ["--cwd", cwd_target]
 
     if cfg.terminal_ephemeral_storage_request:
         resources = cast(dict[str, Any], container["resources"])
@@ -188,7 +196,7 @@ def build_pod_manifest(
         "volumes": volumes,
         "restartPolicy": "Never",
     }
-    if terminal_pod.chat_hash and has_volume:
+    if terminal_pod.chat_hash and cwd_target:
         spec["initContainers"] = [
             {
                 "name": "init-chat-dir",
@@ -224,7 +232,8 @@ def build_pod_manifest(
         "spec": spec,
     }
     if terminal_pod.chat_id:
-        manifest["metadata"]["annotations"] = {"chat-id": terminal_pod.chat_id}
+        # Store the sanitized slug (non-reversible) rather than the raw chat id.
+        manifest["metadata"]["annotations"] = {"chat-slug": sanitize_chat_id(terminal_pod.chat_id)}
 
     return manifest
 
