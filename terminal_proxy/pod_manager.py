@@ -9,11 +9,11 @@ import secrets
 from datetime import datetime
 from typing import Any
 
-from terminal_proxy.config import Settings, StorageMode, settings
+from terminal_proxy.config import PodMode, Settings, StorageMode, settings
 from terminal_proxy.k8s.client import k8s_client
 from terminal_proxy.k8s.pod_builder import build_pod_for_user
 from terminal_proxy.metrics import record_pod_startup
-from terminal_proxy.models import PodState, TerminalPod
+from terminal_proxy.models import PodState, TerminalPod, chat_id_to_hash
 from terminal_proxy.storage import storage_manager
 
 logger = logging.getLogger(__name__)
@@ -63,17 +63,22 @@ class PodManager:
                 if not user_hash:
                     continue
 
+                chat_hash = pod.metadata.labels.get("chat-id-hash")
+                pod_key = f"{user_hash}-{chat_hash}" if chat_hash else user_hash
+
                 if pod.status.phase == "Running":
-                    secret_name = f"terminal-secret-{user_hash}"
+                    secret_name = f"terminal-secret-{pod_key}"
                     api_key = self._get_api_key_from_secret(secret_name)
 
                     terminal = TerminalPod(
                         user_id=user_hash,
                         user_hash=user_hash,
+                        chat_id=(pod.metadata.annotations or {}).get("chat-id"),
+                        chat_hash=chat_hash,
                         pod_name=pod.metadata.name,
-                        service_name=f"terminal-{user_hash}",
+                        service_name=f"terminal-{pod_key}",
                         secret_name=secret_name,
-                        pvc_name=f"pvc-{user_hash}"
+                        pvc_name=f"pvc-{pod_key}"
                         if self.cfg.storage_mode == StorageMode.PER_USER
                         else None,
                         api_key=api_key,
@@ -82,12 +87,12 @@ class PodManager:
                         last_active_at=datetime.utcnow(),
                         pod_ip=pod.status.pod_ip,
                     )
-                    self._pods[user_hash] = terminal
-                    logger.info(f"Reconciled existing pod {pod.metadata.name} for user {user_hash}")
+                    self._pods[pod_key] = terminal
+                    logger.info(f"Reconciled existing pod {pod.metadata.name} for {pod_key}")
                 else:
-                    k8s_client.delete_service(f"terminal-{user_hash}")
+                    k8s_client.delete_service(f"terminal-{pod_key}")
                     k8s_client.delete_pod(pod.metadata.name)
-                    k8s_client.delete_secret(f"terminal-secret-{user_hash}")
+                    k8s_client.delete_secret(f"terminal-secret-{pod_key}")
                     logger.info(f"Deleted non-running pod {pod.metadata.name}")
         except Exception as e:
             logger.error(f"Failed to reconcile existing pods: {e}")
@@ -106,12 +111,14 @@ class PodManager:
     def _generate_api_key(self) -> str:
         return secrets.token_urlsafe(32)
 
-    async def get_or_create(self, user_id: str) -> TerminalPod:
-        """Get or create a terminal pod for the given user."""
+    async def get_or_create(self, user_id: str, chat_id: str | None = None) -> TerminalPod:
+        """Get or create a terminal pod for the given user (and chat, in perChat mode)."""
         user_hash = TerminalPod.create(user_id, "").user_hash
+        per_chat = self.cfg.pod_mode == PodMode.PER_CHAT and bool(chat_id)
+        pod_key = f"{user_hash}-{chat_id_to_hash(chat_id)}" if per_chat else user_hash  # type: ignore[arg-type]
 
         async with self._lock:
-            terminal = self._pods.get(user_hash)
+            terminal = self._pods.get(pod_key)
 
             if terminal and terminal.state == PodState.RUNNING:
                 terminal.last_active_at = datetime.utcnow()
@@ -126,19 +133,21 @@ class PodManager:
                     else:
                         storage_manager.touch_pvc(terminal.pvc_name)
                 k8s_client.delete_pod(terminal.pod_name)
-                del self._pods[user_hash]
+                del self._pods[pod_key]
 
             if len(self._pods) >= self.cfg.max_concurrent_pods:
                 await self._evict_oldest()
 
-            terminal = TerminalPod.create(user_id, self._generate_api_key())
+            terminal = TerminalPod.create(
+                user_id, self._generate_api_key(), chat_id if per_chat else None
+            )
             # Skip PVC creation
             if self.cfg.storage_mode == StorageMode.NONE:
                 terminal.pvc_name = None
 
             await self._create_pod_resources(terminal)
 
-            self._pods[user_hash] = terminal
+            self._pods[pod_key] = terminal
             return terminal
 
     async def _create_pod_resources(self, terminal: TerminalPod) -> None:
@@ -254,14 +263,19 @@ class PodManager:
         now = datetime.utcnow()
         to_evict = []
 
-        for user_hash, terminal in self._pods.items():
+        for pod_key, terminal in self._pods.items():
             idle_seconds = (now - terminal.last_active_at).total_seconds()
-            if idle_seconds > self.cfg.pod_idle_timeout_seconds:
-                to_evict.append(user_hash)
+            timeout = (
+                self.cfg.chat_pod_idle_timeout_seconds
+                if terminal.is_chat_pod
+                else self.cfg.pod_idle_timeout_seconds
+            )
+            if idle_seconds > timeout:
+                to_evict.append(pod_key)
 
-        for user_hash in to_evict:
-            logger.info(f"Cleaning up idle pod for user {user_hash}")
-            await self._delete_pod(user_hash)
+        for pod_key in to_evict:
+            logger.info(f"Cleaning up idle pod {pod_key}")
+            await self._delete_pod(pod_key)
 
     async def _health_check_loop(self) -> None:
         while True:
