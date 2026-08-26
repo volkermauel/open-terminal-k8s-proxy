@@ -170,6 +170,12 @@ class PodManager:
         )
         return f"{user_hash}-{chat_id_to_hash(chat_id)}" if per_chat else user_hash  # type: ignore[arg-type]
 
+    def _key_for(self, terminal: TerminalPod) -> str:
+        """Tracking key for an existing TerminalPod instance."""
+        return (
+            f"{terminal.user_hash}-{terminal.chat_hash}" if terminal.chat_hash else terminal.user_hash
+        )
+
     async def lookup(self, user_id: str, chat_id: str | None = None) -> TerminalPod | None:
         """Return the running pod for (user, chat) if tracked, else None.
 
@@ -182,6 +188,44 @@ class PodManager:
             return terminal
         return None
 
+    async def note_file_api_result(self, terminal: TerminalPod, ok: bool) -> None:
+        """Record whether the terminal's file API (data mount) is working.
+
+        A pod can be Running and Ready yet unable to access its /data volume
+        (stale mount permissions, wedged CSI attach): it answers /ports but every
+        /files/* call fails. K8s liveness never sees this, so count consecutive
+        failures here and recycle the pod once the threshold is reached. Any
+        success resets the counter. Inactive in storage mode 'none' (no data mount
+        means a missing /data is not a failure).
+        """
+        if self.cfg.mount_failure_recycle_threshold <= 0:
+            return
+        if self.cfg.storage_mode == StorageMode.NONE:
+            return
+
+        if ok:
+            terminal.file_api_failures = 0
+            return
+
+        terminal.file_api_failures += 1
+        if terminal.file_api_failures < self.cfg.mount_failure_recycle_threshold:
+            return
+
+        logger.warning(
+            "Terminal pod %s file API failed %d consecutive times (data mount broken?); "
+            "recycling pod%s",
+            terminal.pod_name,
+            terminal.file_api_failures,
+            (
+                f", dropping {terminal.active_connections} active websocket connection(s)"
+                if terminal.active_connections
+                else ""
+            ),
+        )
+        terminal.file_api_failures = 0
+        terminal.bootstrapped_chats.clear()
+        await self._delete_pod(self._key_for(terminal))
+
     def acquire(self, terminal: TerminalPod) -> None:
         """Register an active websocket so the pod is never evicted while in use."""
         terminal.active_connections += 1
@@ -192,8 +236,15 @@ class PodManager:
         if terminal.active_connections > 0:
             terminal.active_connections -= 1
 
-    async def get_or_create(self, user_id: str, chat_id: str | None = None) -> TerminalPod:
-        """Get or create a terminal pod for the given user (and chat, in perChat mode)."""
+    async def get_or_create(
+        self, user_id: str, chat_id: str | None = None, *, bump_activity: bool = True
+    ) -> TerminalPod:
+        """Get or create a terminal pod for the given user (and chat, in perChat mode).
+
+        ``bump_activity=False`` is for read/poll paths (GET /ports, file reads, cwd
+        sync): it resolves or creates the pod but does not refresh last_active_at, so
+        periodic polling must not keep a pod alive past its idle timeout.
+        """
         user_hash = TerminalPod.create(user_id, "").user_hash
         per_chat = self.cfg.pod_mode in (PodMode.PER_CHAT, PodMode.PER_USER_PER_CHAT) and bool(
             chat_id
@@ -204,9 +255,10 @@ class PodManager:
             terminal = self._pods.get(pod_key)
 
             if terminal and terminal.state == PodState.RUNNING:
-                terminal.last_active_at = datetime.utcnow()
-                if terminal.pvc_name:
-                    storage_manager.touch_pvc(terminal.pvc_name)
+                if bump_activity:
+                    terminal.last_active_at = datetime.utcnow()
+                    if terminal.pvc_name:
+                        storage_manager.touch_pvc(terminal.pvc_name)
                 return terminal
 
             if terminal:

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from terminal_proxy import __version__
 from terminal_proxy.chat_bootstrap import ensure_chat_dir
-from terminal_proxy.config import PodMode, settings
+from terminal_proxy.config import PodMode, StorageMode, settings
 from terminal_proxy.metrics import format_prometheus_metrics, record_request, update_pod_states
 from terminal_proxy.models import K8sUnavailableError, PodState, TerminalPod
 from terminal_proxy.pod_manager import pod_manager
@@ -127,23 +127,33 @@ def ensure_k8s_available() -> None:
             raise K8sUnavailableError(f"Kubernetes API initialization failed: {e}") from e
 
 
-async def get_terminal_for_user(user_id: str, chat_id: str | None = None) -> TerminalPod:
+async def get_terminal_for_user(
+    user_id: str, chat_id: str | None = None, *, bump_activity: bool = True
+) -> TerminalPod:
     """Get a terminal pod for reading/proxying.
 
     In perChat modes this is a lookup only -- polling/reads must never (re)create
     pods, which was the source of pod churn. In perUser mode the single shared pod
     is still get-or-created here.
+
+    ``bump_activity=False`` marks read/poll endpoints (GET /ports, file reads,
+    cwd sync): resolving the pod must not refresh its idle timer, or a browser
+    tab polling every few seconds keeps the pod alive forever.
     """
     if settings.pod_mode in (PodMode.PER_CHAT, PodMode.PER_USER_PER_CHAT):
         terminal = await pod_manager.lookup(user_id, chat_id)
         if terminal is None:
             raise HTTPException(status_code=503, detail="Terminal not ready")
         return terminal
-    return await _create_terminal_for_user(user_id, chat_id)
+    return await _create_terminal_for_user(user_id, chat_id, bump_activity=bump_activity)
 
 
 async def _create_terminal_for_user(
-    user_id: str, chat_id: str | None = None, *, force_chat_dir: bool = False
+    user_id: str,
+    chat_id: str | None = None,
+    *,
+    force_chat_dir: bool = False,
+    bump_activity: bool = True,
 ) -> TerminalPod:
     """Get-or-create a terminal pod (terminal creation: POST /api/terminals)."""
     from kubernetes.client.rest import ApiException
@@ -151,7 +161,7 @@ async def _create_terminal_for_user(
     ensure_k8s_available()
 
     try:
-        terminal = await pod_manager.get_or_create(user_id, chat_id)
+        terminal = await pod_manager.get_or_create(user_id, chat_id, bump_activity=bump_activity)
         if terminal.state != PodState.RUNNING:
             raise HTTPException(status_code=503, detail="Terminal not ready")
         # Implicit per-chat cwd bootstrap: runs on every request that resolves a
@@ -373,7 +383,7 @@ async def get_status() -> dict[str, Any]:
 )
 async def proxy_system(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Return the terminal pod's LLM system prompt (if enabled)."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
     return await http_proxy.proxy_request(f"{terminal.endpoint}/system", request, terminal.api_key)
 
 
@@ -385,7 +395,7 @@ async def proxy_system(request: Request, user_id: str = Depends(extract_user_id)
 )
 async def proxy_info(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Return operator-provided environment info from the terminal pod."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
     return await http_proxy.proxy_request(f"{terminal.endpoint}/info", request, terminal.api_key)
 
 
@@ -396,7 +406,7 @@ async def proxy_info(request: Request, user_id: str = Depends(extract_user_id)) 
 )
 async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Get current working directory."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
 
     target_url = f"{terminal.endpoint}/files/cwd"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
@@ -409,7 +419,7 @@ async def get_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> 
 )
 async def set_cwd(request: Request, user_id: str = Depends(extract_user_id)) -> Response:
     """Set current working directory."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
 
     target_url = f"{terminal.endpoint}/files/cwd"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)
@@ -427,10 +437,17 @@ async def proxy_files_list(
     ),
 ) -> Response:
     """Return a structured listing of files and directories at the given path."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
-    return await http_proxy.proxy_request(
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
+    response = await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/list", request, terminal.api_key, pod_key=terminal.user_hash
     )
+    # Listing the data-mount root itself failing (>=400) is the broken-mount
+    # signature: a missing subdirectory legitimately 404s, but the root always
+    # exists when a PVC is mounted. Feed the self-healing counter so a Running
+    # pod with a dead /data gets recycled after enough consecutive failures.
+    if settings.storage_mode != StorageMode.NONE and directory and directory.rstrip("/") == settings.data_mount_path.rstrip("/"):
+        await pod_manager.note_file_api_result(terminal, ok=response.status_code < 400)
+    return response
 
 
 @app.get("/files/read", dependencies=[Depends(verify_api_key)])
@@ -448,7 +465,7 @@ async def proxy_files_read(
     ),
 ) -> Response:
     """Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). For text files you can optionally request a specific line range. Images are returned as binary so you can view and analyze them directly. Use display to show a file to the user."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/read", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -514,7 +531,7 @@ async def proxy_files_grep(
     max_results: int | None = Query(None, description="Maximum number of matches to return."),
 ) -> Response:
     """Search for a text pattern across files in a directory. Returns structured matches with file paths, line numbers, and matching lines. Skips binary files."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/grep", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -533,7 +550,7 @@ async def proxy_files_glob(
     max_results: int | None = Query(None, description="Maximum number of matches to return."),
 ) -> Response:
     """Search for files and subdirectories by name within a specified directory using glob patterns. Results will include the relative path, type, size, and modification time."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
     return await http_proxy.proxy_request(
         f"{terminal.endpoint}/files/glob", request, terminal.api_key, pod_key=terminal.user_hash
     )
@@ -693,7 +710,7 @@ async def proxy_ports(
     _: str = Depends(verify_api_key),
 ) -> Response:
     """Proxy port listing requests."""
-    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request), bump_activity=False)
 
     target_url = f"{terminal.endpoint}/ports"
     return await http_proxy.proxy_request(target_url, request, terminal.api_key)

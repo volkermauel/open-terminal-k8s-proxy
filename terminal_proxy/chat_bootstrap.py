@@ -16,6 +16,7 @@ import httpx
 
 from terminal_proxy.config import PodMode, Settings
 from terminal_proxy.models import TerminalPod, sanitize_chat_id
+from terminal_proxy.pod_manager import pod_manager
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +60,16 @@ async def ensure_chat_dir(
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning("ensure_chat_dir: mkdir %s failed: %s", chat_dir, e)
+            await pod_manager.note_file_api_result(terminal, ok=False)
 
         try:
             headers = {**auth, "X-Session-Id": chat_id}
             resp = await client.post(f"{base}/files/cwd", headers=headers, json={"path": chat_dir})
+            # set_cwd failing after the mkdir attempt above means the data mount
+            # itself is broken (the zombie-pod signature: mkdir 400 + cwd 404).
+            # Feed the self-healing counter; a threshold of consecutive failures
+            # recycles the pod.
+            await pod_manager.note_file_api_result(terminal, ok=resp.status_code < 400)
             if resp.status_code >= 400:
                 logger.warning(
                     "ensure_chat_dir: set cwd %s -> %s %s", chat_dir, resp.status_code, resp.text
@@ -71,4 +78,5 @@ async def ensure_chat_dir(
                 # Only cache on a successful set_cwd so a transient failure retries.
                 terminal.bootstrapped_chats.add(chat_id)
         except Exception as e:  # noqa: BLE001
-            logger.warning("ensure_chat_dir: set cwd %s failed: %s", chat_dir, e)
+            logger.warning("ensure_chat_dir: set cwd %s failed: %s", chat_id, e)
+            await pod_manager.note_file_api_result(terminal, ok=False)

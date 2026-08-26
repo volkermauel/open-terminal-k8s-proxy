@@ -165,8 +165,33 @@ async def test_ensure_chat_dir_force_bypasses_cache() -> None:
     client, ctx = _patch_client()
     terminal = _terminal()
     with ctx:
-        await ensure_chat_dir(terminal, "chat-1", cfg)              # bootstrap + cache
-        await ensure_chat_dir(terminal, "chat-1", cfg)              # cached -> skipped
+        await ensure_chat_dir(terminal, "chat-1", cfg)  # bootstrap + cache
+        await ensure_chat_dir(terminal, "chat-1", cfg)  # cached -> skipped
         await ensure_chat_dir(terminal, "chat-1", cfg, force=True)  # forced -> re-runs
     assert client.post.call_count == 4  # 2 (first) + 0 (cached) + 2 (forced)
     assert "chat-1" in terminal.bootstrapped_chats
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_dir_feeds_mount_failure_counter() -> None:
+    """mkdir 400 + cwd 404 is the broken-mount signature: ok=False is recorded."""
+    cfg = Settings(proxy_api_key="k", storage_mode=StorageMode.PER_USER)
+    client, ctx = _patch_client()
+    client.post = AsyncMock(side_effect=[_resp(400), _resp(404)])
+    with ctx, patch("terminal_proxy.chat_bootstrap.pod_manager") as pm:
+        pm.note_file_api_result = AsyncMock()
+        terminal = _terminal()
+        await ensure_chat_dir(terminal, "chat-42", cfg)
+        pm.note_file_api_result.assert_awaited_once_with(terminal, ok=False)
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_dir_success_feeds_mount_counter_ok() -> None:
+    cfg = Settings(proxy_api_key="k", storage_mode=StorageMode.PER_USER)
+    client, ctx = _patch_client()
+    client.post = AsyncMock(side_effect=[_resp(200), _resp(200)])
+    with ctx, patch("terminal_proxy.chat_bootstrap.pod_manager") as pm:
+        pm.note_file_api_result = AsyncMock()
+        terminal = _terminal()
+        await ensure_chat_dir(terminal, "chat-42", cfg)
+        pm.note_file_api_result.assert_awaited_once_with(terminal, ok=True)
