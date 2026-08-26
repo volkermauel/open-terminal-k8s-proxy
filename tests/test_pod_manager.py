@@ -919,3 +919,72 @@ async def test_health_check_preserves_cache_when_stable(pod_manager, mock_k8s_cl
 
     assert terminal.bootstrapped_chats == {"chat-1"}  # preserved
     assert terminal.container_restart_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_read_does_not_bump_last_active(pod_manager, mock_storage_manager):
+    existing = TerminalPod.create("user-123", "api-key")
+    existing.state = PodState.RUNNING
+    pod_manager._pods[existing.user_hash] = existing
+    old = datetime.utcnow() - timedelta(seconds=1000)
+    existing.last_active_at = old
+
+    await pod_manager.get_or_create("user-123", bump_activity=False)
+
+    assert existing.last_active_at == old
+    mock_storage_manager.touch_pvc.assert_not_called()
+
+    await pod_manager.get_or_create("user-123", bump_activity=True)
+
+    assert existing.last_active_at > old
+    mock_storage_manager.touch_pvc.assert_called_once_with(existing.pvc_name)
+
+
+@pytest.mark.asyncio
+async def test_note_file_api_result_recycles_after_threshold(
+    pod_manager, mock_k8s_client, mock_storage_manager
+):
+    pod_manager.cfg.mount_failure_recycle_threshold = 3
+    terminal = TerminalPod.create("user-123", "api-key")
+    terminal.state = PodState.RUNNING
+    pod_manager._pods[terminal.user_hash] = terminal
+
+    await pod_manager.note_file_api_result(terminal, ok=False)
+    await pod_manager.note_file_api_result(terminal, ok=False)
+    assert terminal.user_hash in pod_manager._pods
+    mock_k8s_client.delete_pod.assert_not_called()
+
+    await pod_manager.note_file_api_result(terminal, ok=False)
+
+    assert terminal.user_hash not in pod_manager._pods
+    mock_k8s_client.delete_pod.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_note_file_api_result_resets_on_success(pod_manager, mock_k8s_client):
+    pod_manager.cfg.mount_failure_recycle_threshold = 3
+    terminal = TerminalPod.create("user-123", "api-key")
+    terminal.state = PodState.RUNNING
+    pod_manager._pods[terminal.user_hash] = terminal
+
+    await pod_manager.note_file_api_result(terminal, ok=False)
+    await pod_manager.note_file_api_result(terminal, ok=False)
+    await pod_manager.note_file_api_result(terminal, ok=True)
+    await pod_manager.note_file_api_result(terminal, ok=False)
+
+    assert terminal.user_hash in pod_manager._pods
+    mock_k8s_client.delete_pod.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_note_file_api_result_disabled_in_none_mode(pod_manager, mock_k8s_client):
+    pod_manager.cfg.storage_mode = StorageMode.NONE
+    pod_manager.cfg.mount_failure_recycle_threshold = 1
+    terminal = TerminalPod.create("user-123", "api-key")
+    terminal.state = PodState.RUNNING
+    pod_manager._pods[terminal.user_hash] = terminal
+
+    await pod_manager.note_file_api_result(terminal, ok=False)
+
+    assert terminal.user_hash in pod_manager._pods
+    mock_k8s_client.delete_pod.assert_not_called()

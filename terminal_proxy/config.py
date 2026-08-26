@@ -145,6 +145,12 @@ class Settings(BaseSettings):
         default=True,
         description="Create a per-chat working directory under the data mount for each X-Session-Id.",
     )
+    mount_failure_recycle_threshold: int = Field(
+        default=10,
+        description="Consecutive data-mount/file-API failures tolerated before the terminal "
+        "pod is deleted and recreated (self-healing for a pod that is Running but "
+        "cannot access its /data volume, e.g. stale mount permissions). 0 disables.",
+    )
 
     labels_app: str = Field(
         default="open-terminal-user", description="App label for terminal pods."
@@ -172,10 +178,7 @@ class Settings(BaseSettings):
                 "podMode 'perChat' requires storage.mode 'shared' (ReadWriteMany). "
                 "Set storage.mode=shared before enabling podMode=perChat."
             )
-        if (
-            self.pod_mode == PodMode.PER_USER_PER_CHAT
-            and self.storage_mode != StorageMode.PER_USER
-        ):
+        if self.pod_mode == PodMode.PER_USER_PER_CHAT and self.storage_mode != StorageMode.PER_USER:
             raise ValueError(
                 "podMode 'perUserPerChat' requires storage.mode 'perUser' "
                 "(a dedicated ReadWriteMany PVC per user, shared by that user's chat pods). "

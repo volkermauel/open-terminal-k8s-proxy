@@ -83,6 +83,9 @@ class TerminalPod:
     # (re)created or its container restart_count increases.
     bootstrapped_chats: set[str] = field(default_factory=set)
     container_restart_count: int = 0
+    # Consecutive data-mount/file-API failures (self-healing: recycled at
+    # Settings.mount_failure_recycle_threshold). Reset by any success.
+    file_api_failures: int = 0
 
     @property
     def endpoint(self) -> str:
