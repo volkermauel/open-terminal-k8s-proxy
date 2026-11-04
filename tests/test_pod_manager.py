@@ -142,10 +142,10 @@ async def test_get_or_create_none_mode_no_pvc(mock_k8s_client, mock_storage_mana
     mock_storage_manager.create_user_pvc.assert_not_called()
     mock_k8s_client.create_pod.assert_called_once()
 
-    # No volumes should be present
+    # Only the memory-backed /dev/shm is mounted; no data volumes
     pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
     volumes = pod_manifest["spec"]["volumes"]
-    assert volumes == []
+    assert [v["name"] for v in volumes] == ["dev-shm"]
 
 
 @pytest.mark.asyncio
@@ -382,7 +382,9 @@ async def test_security_context_set_when_pvc_mounted(mock_k8s_client, mock_stora
 
 
 @pytest.mark.asyncio
-async def test_security_context_not_set_without_pvc(mock_k8s_client, mock_storage_manager):
+async def test_security_context_fs_group_always_set(mock_k8s_client, mock_storage_manager):
+    # /dev/shm is always a mounted volume now, so fsGroup is set in every mode
+    # (uid 1000 stays the owner of the tmpfs, matching the image's user).
     cfg = Settings(
         proxy_api_key="test-key",
         namespace="test-ns",
@@ -393,7 +395,10 @@ async def test_security_context_not_set_without_pvc(mock_k8s_client, mock_storag
     await pm.get_or_create("no-fsgroup-user")
 
     pod_manifest = mock_k8s_client.create_pod.call_args[0][0]
-    assert "securityContext" not in pod_manifest["spec"]
+    assert pod_manifest["spec"]["securityContext"] == {
+        "fsGroup": 1000,
+        "fsGroupChangePolicy": "Always",
+    }
 
 
 @pytest.mark.asyncio

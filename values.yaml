@@ -5,10 +5,27 @@ image:
   pullPolicy: Always
   tag: main
 
+# Terminal image: MUST be pinned to a version tag (never "latest") so
+# imagePullPolicy IfNotPresent is safe. Must be a desktop-capable (default)
+# image -- the slim/alpine/openshift variants lack tigervnc, xfce4, pulseaudio
+# and chromium, so Desktop and Browser cannot work on them.
 terminalImage:
   repository: ghcr.io/open-webui/open-terminal
   pullPolicy: IfNotPresent
-  tag: latest
+  tag: v0.16.1
+
+# Capability flags passed to terminal pods as OPEN_TERMINAL_ENABLE_*.
+# null leaves the terminal image's default (all true on v0.16.x).
+# Desktop and Browser additionally require the desktop-capable default image.
+terminalCapabilities:
+  desktop: true
+  browser: true
+  terminal: null
+  notebooks: null
+
+# Memory-backed /dev/shm for terminal pods (chromium needs it; too small a
+# default tmpfs makes chrome tabs crash). Mounted as emptyDir medium: Memory.
+terminalShmSize: 512Mi
 
 service:
   type: ClusterIP
@@ -83,6 +100,7 @@ podStartupTimeoutSeconds: 60
 podCleanupIntervalSeconds: 60
 terminal:
   # Path the PVC is mounted at and used as --cwd / HOME for terminal pods.
+  # (See also terminalCapabilities / terminalShmSize above.)
   dataMountPath: /data
 # Pod provisioning:
 #   perUser        - one pod per user (per-chat isolation via working dirs)

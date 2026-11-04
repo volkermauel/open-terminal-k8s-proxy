@@ -15,6 +15,18 @@ logger = logging.getLogger(__name__)
 SHARED_PVC_NAME = "terminal-shared-storage"
 API_KEY_SECRET_KEY = "api-key"
 
+# Settings field -> terminal pod env var. Values (bool | None) are passed
+# through verbatim; None leaves the terminal image's upstream default in place.
+CAPABILITY_ENV_MAP = {
+    "terminal_enable_desktop": "OPEN_TERMINAL_ENABLE_DESKTOP",
+    "terminal_enable_browser": "OPEN_TERMINAL_ENABLE_BROWSER",
+    "terminal_enable_terminal": "OPEN_TERMINAL_ENABLE_TERMINAL",
+    "terminal_enable_notebooks": "OPEN_TERMINAL_ENABLE_NOTEBOOKS",
+}
+
+SHM_VOLUME_NAME = "dev-shm"
+SHM_MOUNT_PATH = "/dev/shm"
+
 
 LAST_ACTIVE_ANNOTATION = "terminal-proxy/last-active"
 
@@ -129,7 +141,7 @@ def build_pod_manifest(
             mount["subPath"] = shared_sub_path
         volume_mounts.append(mount)
 
-    has_volume = bool(volume_mounts)
+    has_volume = bool(pvc_name or shared_pvc_name)
     # Terminal cwd: open inside the mounted data volume so writes reach the PVC.
     # In `none` mode there is no volume, so we leave open-terminal's image default
     # (its WORKDIR, e.g. /home/user) untouched -- no --cwd / HOME override.
@@ -160,8 +172,20 @@ def build_pod_manifest(
 
     env.append(env_var)
 
+    for setting, env_name in CAPABILITY_ENV_MAP.items():
+        value = getattr(cfg, setting)
+        if value is not None:
+            env.append({"name": env_name, "value": str(value).lower()})
+
     if cwd_target:
         env.append({"name": "HOME", "value": cwd_target})
+
+    # Memory-backed /dev/shm: chromium crashes without it (small default tmpfs).
+    shm_volume: dict[str, Any] = {"name": SHM_VOLUME_NAME, "emptyDir": {"medium": "Memory"}}
+    if cfg.terminal_shm_size:
+        shm_volume["emptyDir"]["sizeLimit"] = cfg.terminal_shm_size
+    volumes.append(shm_volume)
+    volume_mounts.append({"name": SHM_VOLUME_NAME, "mountPath": SHM_MOUNT_PATH})
 
     container = {
         "name": "terminal",

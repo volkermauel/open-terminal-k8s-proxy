@@ -45,7 +45,12 @@ helm install open-terminal-k8s-proxy ./open-terminal-k8s-proxy \
 | `secret.existingSecret`                            | `""`                               | Reference to external Secret (disables `create`)                |
 | `secret.data.PROXY_API_KEY`                        | `""`                               | API key for Open WebUI → Proxy                                  |
 | `terminalImage.repository`                         | `ghcr.io/open-webui/open-terminal` | Terminal container image                                        |
-| `terminalImage.tag`                                | `latest`                           | Terminal image tag                                              |
+| `terminalImage.tag`                                | `v0.16.1`                          | Terminal image tag (must be pinned; never `latest`)             |
+| `terminalCapabilities.desktop`                     | `true`                             | `OPEN_TERMINAL_ENABLE_DESKTOP` (needs default desktop-capable image) |
+| `terminalCapabilities.browser`                     | `true`                             | `OPEN_TERMINAL_ENABLE_BROWSER` (needs chromium)                 |
+| `terminalCapabilities.terminal`                    | `null`                             | `OPEN_TERMINAL_ENABLE_TERMINAL` (`null` = image default)        |
+| `terminalCapabilities.notebooks`                   | `null`                             | `OPEN_TERMINAL_ENABLE_NOTEBOOKS` (`null` = image default)       |
+| `terminalShmSize`                                  | `512Mi`                            | Memory-backed `/dev/shm` size for terminal pods                 |
 | `storage.mode`                                     | `none`                             | Storage mode: `none`, `perUser`, `shared`, or `sharedRWO`       |
 | `storage.perUser.size`                             | `5Gi`                              | PVC size per user (perUser mode)                                |
 | `storage.shared.size`                              | `100Gi`                            | Shared PVC size (shared modes)                                  |

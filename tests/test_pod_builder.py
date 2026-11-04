@@ -115,3 +115,51 @@ def test_peruserperchat_pod_uses_per_user_pvc_and_chat_dir() -> None:
     assert pod["metadata"]["labels"].get("chat-id-hash") == t.chat_hash
     inits = pod["spec"].get("initContainers", [])
     assert len(inits) == 1 and "mkdir -p /data/chat-7" in inits[0]["command"][2]
+
+
+def _env_by_name(pod_manifest: dict[str, Any]) -> dict[str, str]:
+    c = _container(pod_manifest)
+    return {e["name"]: e.get("value") for e in c["env"]}
+
+
+def test_capability_env_passthrough() -> None:
+    cfg = _cfg(
+        terminal_enable_desktop=False,
+        terminal_enable_browser=True,
+        terminal_enable_terminal=None,
+        terminal_enable_notebooks=None,
+    )
+    pod, *_ = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
+    env = _env_by_name(pod)
+    assert env["OPEN_TERMINAL_ENABLE_DESKTOP"] == "false"
+    assert env["OPEN_TERMINAL_ENABLE_BROWSER"] == "true"
+    # None leaves the terminal image's upstream default in place
+    assert "OPEN_TERMINAL_ENABLE_TERMINAL" not in env
+    assert "OPEN_TERMINAL_ENABLE_NOTEBOOKS" not in env
+
+
+def test_dev_shm_tmpfs_mounted_with_size_limit() -> None:
+    cfg = _cfg(terminal_shm_size="512Mi")
+    pod, *_ = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
+    volume = next(v for v in pod["spec"]["volumes"] if v["name"] == "dev-shm")
+    assert volume["emptyDir"] == {"medium": "Memory", "sizeLimit": "512Mi"}
+    c = _container(pod)
+    assert {"name": "dev-shm", "mountPath": "/dev/shm"} in c["volumeMounts"]
+
+
+def test_dev_shm_without_explicit_size_limit() -> None:
+    cfg = _cfg(terminal_shm_size="")
+    pod, *_ = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
+    volume = next(v for v in pod["spec"]["volumes"] if v["name"] == "dev-shm")
+    assert volume["emptyDir"] == {"medium": "Memory"}
+
+
+def test_shm_volume_does_not_activate_data_volume_cwd() -> None:
+    # The always-present tmpfs must not count as a data volume: none mode keeps
+    # open-terminal's image default cwd/HOME.
+    cfg = _cfg(storage_mode=StorageMode.NONE)
+    pod, *_ = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
+    c = _container(pod)
+    assert "args" not in c
+    assert all(e["name"] != "HOME" for e in c["env"])
+    assert next(v for v in pod["spec"]["volumes"] if v["name"] == "dev-shm")

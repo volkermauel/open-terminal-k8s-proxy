@@ -391,3 +391,339 @@ async def test_create_terminal_for_user_forces_chat_dir_on_spawn() -> None:
 
     # force=True bypasses the cache (recreates a deleted dir) before the PTY spawns
     bootstrap.assert_awaited_once_with(terminal, "chat-9", ANY, force=True)
+
+
+# --- /api/config capability discovery ----------------------------------------
+
+
+def _config_headers() -> dict[str, str]:
+    from terminal_proxy.main import PROXY_API_KEY
+
+    return {"Authorization": f"Bearer {PROXY_API_KEY}", "X-User-Id": "user-1"}
+
+
+def _terminal_stub() -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(endpoint="http://pod.test:8000", api_key="pod-key", user_hash="h")
+
+
+class _Stub:
+    """Attribute bag that keeps constructor kwargs (test helper)."""
+
+    def __init__(self, **kw: object) -> None:
+        self.__dict__.update(kw)
+
+
+def test_api_config_requires_auth(client):
+    assert client.get("/api/config").status_code == 401
+
+
+def test_api_config_forwards_pod_features(client):
+    from unittest.mock import AsyncMock, patch
+
+    terminal = _terminal_stub()
+    pod_response = _Stub(
+        raise_for_status=lambda: None,
+        json=lambda: {
+            "features": {
+                "terminal": True,
+                "notebooks": True,
+                "system": True,
+                "git": True,
+                "events": True,
+                "browser": True,
+                "desktop": True,
+            }
+        },
+    )
+    http_client = _Stub(get=AsyncMock(return_value=pod_response))
+
+    with (
+        patch(
+            "terminal_proxy.main.get_terminal_for_user",
+            new=AsyncMock(return_value=terminal),
+        ),
+        patch(
+            "terminal_proxy.main.http_proxy.get_client",
+            new=AsyncMock(return_value=http_client),
+        ),
+    ):
+        response = client.get("/api/config", headers=_config_headers())
+
+    assert response.status_code == 200
+    features = response.json()["features"]
+    # The pod's own flags win verbatim (desktop computed by the pod itself)
+    assert features["desktop"] is True
+    assert features["browser"] is True
+    assert features["git"] is True
+    # The pod is fetched with its own API key
+    assert http_client.get.await_args.args[0] == "http://pod.test:8000/api/config"
+    assert http_client.get.await_args.kwargs["headers"]["Authorization"] == "Bearer pod-key"
+
+
+def test_api_config_falls_back_to_configured_flags_when_pod_unreachable(
+    client, monkeypatch
+):
+    from unittest.mock import AsyncMock, patch
+
+    from fastapi import HTTPException
+
+    from terminal_proxy import config as config_module
+
+    monkeypatch.setattr(config_module.settings, "terminal_enable_desktop", False)
+    monkeypatch.setattr(config_module.settings, "terminal_enable_browser", True)
+
+    async def unavailable(*_a: object, **_k: object) -> None:
+        raise HTTPException(status_code=503, detail="Terminal not ready")
+
+    with patch("terminal_proxy.main.get_terminal_for_user", new=AsyncMock(side_effect=unavailable)):
+        response = client.get("/api/config", headers=_config_headers())
+
+    assert response.status_code == 200
+    features = response.json()["features"]
+    assert features["desktop"] is False
+    assert features["browser"] is True
+    # git is unknowable without a pod: never advertise it in the fallback
+    assert features["git"] is False
+    assert features["events"] is True
+
+
+def test_api_config_without_user_id_uses_fallback(client):
+    from terminal_proxy.main import PROXY_API_KEY
+
+    response = client.get("/api/config", headers={"Authorization": f"Bearer {PROXY_API_KEY}"})
+    assert response.status_code == 200
+    assert "features" in response.json()
+
+
+# --- catch-all pass-through ---------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_browser_sessions():
+    from terminal_proxy.main import _browser_sessions
+
+    _browser_sessions.clear()
+    yield
+    _browser_sessions.clear()
+
+
+def _capture_proxy():
+    """Patch pod resolution and HTTP forwarding; return the capture list."""
+    from fastapi import Response
+
+    captured: list[dict[str, object]] = []
+
+    async def fake_proxy(target_url, request, terminal_api_key, pod_key=None):
+        captured.append(
+            {
+                "url": target_url,
+                "api_key": terminal_api_key,
+                "pod_key": pod_key,
+                "query": str(request.query_params),
+            }
+        )
+        return Response(content=b'{"id": "sess-from-response", "token": "t"}', status_code=200)
+
+    return captured, fake_proxy
+
+
+def _patch_terminal():
+    from unittest.mock import AsyncMock, patch
+
+    return patch(
+        "terminal_proxy.main.get_terminal_for_user",
+        new=AsyncMock(return_value=_terminal_stub()),
+    )
+
+
+def test_catch_all_requires_auth(client):
+    assert client.get("/git/status").status_code == 401
+    assert client.post("/desktop/action").status_code == 401
+
+
+def test_catch_all_requires_user_id(client):
+    from terminal_proxy.main import PROXY_API_KEY
+
+    response = client.get("/git/status", headers={"Authorization": f"Bearer {PROXY_API_KEY}"})
+    assert response.status_code == 400
+
+
+def test_catch_all_forwards_path_query_and_pod_key(client):
+    captured, fake_proxy = _capture_proxy()
+    from unittest.mock import patch
+
+    with (
+        _patch_terminal() as _p1,
+        patch("terminal_proxy.main.http_proxy.proxy_request", new=fake_proxy),
+    ):
+        response = client.get(
+            "/git/log?since=2026-01-01&max=5", headers=_config_headers()
+        )
+
+    assert response.status_code == 200
+    assert captured[0]["url"] == "http://pod.test:8000/git/log"
+    assert captured[0]["query"] == "since=2026-01-01&max=5"
+    assert captured[0]["api_key"] == "pod-key"
+
+
+def test_catch_all_distinguishes_explicit_routes(client):
+    # explicit routes still win over the catch-all (registration order)
+    from terminal_proxy.main import PROXY_API_KEY
+
+    # /desktop is explicit and requires X-User-Id (400, not forwarded blindly)
+    response = client.get("/desktop", headers={"Authorization": f"Bearer {PROXY_API_KEY}"})
+    assert response.status_code == 400
+
+
+def test_browser_capability_url_bypasses_api_key(client):
+    from terminal_proxy.main import _browser_sessions
+
+    _browser_sessions["sess1"] = _terminal_stub()
+    captured, fake_proxy = _capture_proxy()
+    from unittest.mock import patch
+
+    with patch("terminal_proxy.main.http_proxy.proxy_request", new=fake_proxy):
+        # no Authorization / X-User-Id headers at all: the token in the path IS the auth
+        response = client.get("/browser/view/sess1/tok/runtime.js")
+
+    assert response.status_code == 200
+    assert captured[0]["url"] == "http://pod.test:8000/browser/view/sess1/tok/runtime.js"
+    assert captured[0]["api_key"] == "pod-key"
+
+
+def test_browser_capability_unknown_session_is_404(client):
+    response = client.get("/browser/view/unknown-sid/tok/runtime.js")
+    assert response.status_code == 404
+
+
+def test_catch_all_learns_session_from_create_response(client):
+    captured, fake_proxy = _capture_proxy()
+    from unittest.mock import patch
+
+    from terminal_proxy.main import _browser_sessions
+
+    with (
+        _patch_terminal(),
+        patch("terminal_proxy.main.http_proxy.proxy_request", new=fake_proxy),
+    ):
+        created = client.post("/browser/sessions", json={"url": ""}, headers=_config_headers())
+        assert created.status_code == 200
+        assert "sess-from-response" in _browser_sessions
+        # a browser can now load capability URLs without any headers
+        loaded = client.get("/browser/view/sess-from-response/tok/frame/https/example.com/index")
+
+    assert loaded.status_code == 200
+    assert (
+        captured[-1]["url"]
+        == "http://pod.test:8000/browser/view/sess-from-response/tok/frame/https/example.com/index"
+    )
+
+
+def test_catch_all_forgets_session_on_delete(client):
+    from terminal_proxy.main import _browser_sessions
+
+    _browser_sessions["sess1"] = _terminal_stub()
+    _, fake_proxy = _capture_proxy()
+    from unittest.mock import patch
+
+    with (
+        _patch_terminal(),
+        patch("terminal_proxy.main.http_proxy.proxy_request", new=fake_proxy),
+    ):
+        response = client.delete("/browser/sessions/sess1", headers=_config_headers())
+
+    assert response.status_code == 200
+    assert "sess1" not in _browser_sessions
+
+
+def test_catch_all_registers_sessions_from_list_response(client):
+    from unittest.mock import patch
+
+    from fastapi import Response
+
+    from terminal_proxy.main import _browser_sessions
+
+    async def fake_proxy(target_url, request, terminal_api_key, pod_key=None):
+        return Response(
+            content=b'{"current_session_id": "a", "sessions": [{"id": "a"}, {"id": "b"}]}',
+            status_code=200,
+        )
+
+    with (
+        _patch_terminal(),
+        patch("terminal_proxy.main.http_proxy.proxy_request", new=fake_proxy),
+    ):
+        assert client.get("/browser/sessions", headers=_config_headers()).status_code == 200
+
+    assert "a" in _browser_sessions and "b" in _browser_sessions
+
+
+# --- catch-all WebSocket ------------------------------------------------------
+
+
+def test_catch_all_ws_registers_active_connection(client):
+    from unittest.mock import AsyncMock, patch
+
+    from terminal_proxy.main import PROXY_API_KEY
+    from terminal_proxy.models import TerminalPod
+
+    terminal = TerminalPod.create("user-1", "pod-key")
+
+    async def fake_proxy(client_ws, terminal, path, **kwargs):
+        assert path == "/desktop/stream"
+        assert terminal.active_connections == 1  # registered while in use
+        await client_ws.send_text("upstream-ready")
+
+    with (
+        patch("terminal_proxy.main.get_terminal_for_user", new=AsyncMock(return_value=terminal)),
+        patch("terminal_proxy.main.ws_proxy.proxy_websocket", new=fake_proxy),
+        client.websocket_connect("/desktop/stream?user_id=user-1") as ws,
+    ):
+        ws.send_json({"type": "auth", "token": PROXY_API_KEY})
+        assert ws.receive_text() == "upstream-ready"
+
+    assert terminal.active_connections == 0  # deregistered after close
+
+
+def test_catch_all_ws_rejects_bad_auth(client):
+    with client.websocket_connect("/events?user_id=user-1") as ws:
+        ws.send_json({"type": "auth", "token": "wrong"})
+        frame = ws.receive()
+    assert frame["type"] == "websocket.close"
+    assert frame["code"] == 1008
+
+
+def test_capability_ws_skips_auth_and_registers(client):
+    from unittest.mock import patch
+
+    from terminal_proxy.main import _browser_sessions
+    from terminal_proxy.models import TerminalPod
+
+    terminal = TerminalPod.create("user-1", "pod-key")
+    _browser_sessions["s1"] = terminal
+    seen: dict[str, object] = {}
+
+    async def fake_proxy(client_ws, terminal, path, **kwargs):
+        seen["path"] = path
+        seen["send_auth"] = kwargs.get("send_auth")
+        assert terminal.active_connections == 1
+
+    with (
+        patch("terminal_proxy.main.ws_proxy.proxy_websocket", new=fake_proxy),
+        # NO auth message: capability sockets must connect directly
+        client.websocket_connect("/browser/view/s1/tok/ws"),
+    ):
+        pass
+
+    assert seen["path"] == "/browser/view/s1/tok/ws"
+    assert seen["send_auth"] is False
+    assert terminal.active_connections == 0
+
+
+def test_capability_ws_unknown_session_closed(client):
+    with client.websocket_connect("/browser/view/nope/tok/ws") as ws:
+        frame = ws.receive()
+    assert frame["type"] == "websocket.close"
+    assert frame["code"] == 4004

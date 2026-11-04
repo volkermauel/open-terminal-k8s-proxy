@@ -74,6 +74,35 @@ class Settings(BaseSettings):
         description="Port that terminal pods listen on.",
     )
 
+    # Capability flags passed through to terminal pods as OPEN_TERMINAL_ENABLE_*.
+    # None leaves the upstream image default (all true on v0.16.x); these also
+    # serve as the /api/config fallback flags when no pod can be reached.
+    terminal_enable_desktop: bool | None = Field(
+        default=None,
+        description="OPEN_TERMINAL_ENABLE_DESKTOP for terminal pods. "
+        "Unset leaves the terminal image's default.",
+    )
+    terminal_enable_browser: bool | None = Field(
+        default=None,
+        description="OPEN_TERMINAL_ENABLE_BROWSER for terminal pods. "
+        "Unset leaves the terminal image's default.",
+    )
+    terminal_enable_terminal: bool | None = Field(
+        default=None,
+        description="OPEN_TERMINAL_ENABLE_TERMINAL for terminal pods. "
+        "Unset leaves the terminal image's default.",
+    )
+    terminal_enable_notebooks: bool | None = Field(
+        default=None,
+        description="OPEN_TERMINAL_ENABLE_NOTEBOOKS for terminal pods. "
+        "Unset leaves the terminal image's default.",
+    )
+    terminal_shm_size: str = Field(
+        default="512Mi",
+        description="Size limit for the terminal pod's memory-backed /dev/shm "
+        "(required by chromium). Empty string mounts tmpfs without a limit.",
+    )
+
     terminal_node_selector: dict[str, str] = Field(
         default_factory=dict, description="nodeSelector for terminal pods."
     )

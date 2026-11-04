@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
+from typing import Any
 
 import aiohttp
 from fastapi import WebSocket, WebSocketDisconnect
@@ -13,6 +15,21 @@ from fastapi import WebSocket, WebSocketDisconnect
 from terminal_proxy.models import TerminalPod
 
 logger = logging.getLogger(__name__)
+
+# Capability URLs embed a per-session token; keep it out of logs.
+_TOKEN_IN_PATH_RE = re.compile(r"(browser/view/[^/]+)/[^/]+(/?)")
+
+RELAY_WEBSOCKET_TYPES = (
+    aiohttp.WSMsgType.CLOSE,
+    aiohttp.WSMsgType.CLOSING,
+    aiohttp.WSMsgType.CLOSED,
+    aiohttp.WSMsgType.ERROR,
+)
+
+
+def safe_ws_path(path: str) -> str:
+    """Mask browser capability tokens so they never reach logs."""
+    return _TOKEN_IN_PATH_RE.sub(r"\1/***/", path)
 
 
 class WebSocketProxy:
@@ -38,18 +55,40 @@ class WebSocketProxy:
         client_ws: WebSocket,
         terminal: TerminalPod,
         path: str,
+        *,
+        send_auth: bool = True,
+        auth_payload: dict[str, Any] | None = None,
     ) -> None:
-        """Proxy a WebSocket connection to a terminal pod."""
+        """Proxy a WebSocket connection to a terminal pod.
+
+        send_auth=False for capability-URL routes (/browser/view/{sid}/{token}/...):
+        upstream authenticates those by the path token and treats our first
+        message as protocol payload, so none may be injected. The client's auth
+        payload (extra keys like chat_id) is relayed upstream with the pod key
+        substituted for the proxy key.
+        """
         session = await self.get_session()
 
         ws_url = f"ws://{terminal.service_name}:8000{path}"
-        logger.info(f"Connecting to upstream WebSocket: {ws_url}")
+        log_url = f"ws://{terminal.service_name}:8000{safe_ws_path(path)}"
+        logger.info(f"Connecting to upstream WebSocket: {log_url}")
+
+        connect_kwargs: dict[str, Any] = {}
+        requested = client_ws.headers.get("sec-websocket-protocol")
+        if requested:
+            connect_kwargs["protocols"] = [
+                p.strip() for p in requested.split(",") if p.strip()
+            ]
 
         try:
-            async with session.ws_connect(ws_url) as upstream_ws:
-                logger.info(f"Upstream WebSocket connected: {ws_url}")
+            async with session.ws_connect(ws_url, **connect_kwargs) as upstream_ws:
+                logger.info(f"Upstream WebSocket connected: {log_url}")
 
-                await upstream_ws.send_str(json.dumps({"type": "auth", "token": terminal.api_key}))
+                if send_auth:
+                    payload = dict(auth_payload) if isinstance(auth_payload, dict) else {}
+                    payload["type"] = "auth"
+                    payload["token"] = terminal.api_key
+                    await upstream_ws.send_str(json.dumps(payload))
 
                 async def client_to_upstream() -> None:
                     try:
@@ -58,7 +97,7 @@ class WebSocketProxy:
                             logger.debug(f"Client message: {msg.get('type')}")
                             if msg["type"] == "websocket.disconnect":
                                 logger.info("Client sent disconnect")
-                                break
+                                return
                             elif msg["type"] == "websocket.receive":
                                 if "bytes" in msg and msg.get("bytes"):
                                     await upstream_ws.send_bytes(msg["bytes"])
@@ -76,19 +115,30 @@ class WebSocketProxy:
                                 await client_ws.send_bytes(msg.data)
                             elif msg.type == aiohttp.WSMsgType.TEXT:
                                 await client_ws.send_text(msg.data)
-                            elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
-                                break
+                            elif msg.type in RELAY_WEBSOCKET_TYPES:
+                                return
                     except Exception as e:
                         logger.warning(f"Upstream to client error: {e}")
 
-                await asyncio.gather(
-                    client_to_upstream(),
-                    upstream_to_client(),
-                    return_exceptions=True,
+                # Whichever side finishes first tears down the other and both
+                # connections; waiting for both would keep a live upstream pinned
+                # to a dead client (and the pod unevictable).
+                tasks = [
+                    asyncio.create_task(client_to_upstream()),
+                    asyncio.create_task(upstream_to_client()),
+                ]
+                _done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
                 )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                # retrieve exceptions so asyncio does not warn about them
+                for task in _done:
+                    task.exception()
 
         except aiohttp.ClientError as e:
-            logger.warning(f"WebSocket connection error to {ws_url}: {e}")
+            logger.warning(f"WebSocket connection error to {log_url}: {e}")
             await client_ws.close(code=1011, reason="Terminal unavailable")
         except Exception as e:
             logger.error(f"WebSocket proxy error: {e}")

@@ -52,6 +52,25 @@ spec:
               value: {{ index .Values.terminalResources.requests "ephemeral-storage" | default "" | quote }}
             - name: TERMINAL_EPHEMERAL_STORAGE_LIMIT
               value: {{ index .Values.terminalResources.limits "ephemeral-storage" | default "" | quote }}
+            {{- $caps := .Values.terminalCapabilities }}
+            {{- if not (kindIs "invalid" $caps.desktop) }}
+            - name: TERMINAL_ENABLE_DESKTOP
+              value: {{ $caps.desktop | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $caps.browser) }}
+            - name: TERMINAL_ENABLE_BROWSER
+              value: {{ $caps.browser | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $caps.terminal) }}
+            - name: TERMINAL_ENABLE_TERMINAL
+              value: {{ $caps.terminal | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $caps.notebooks) }}
+            - name: TERMINAL_ENABLE_NOTEBOOKS
+              value: {{ $caps.notebooks | quote }}
+            {{- end }}
+            - name: TERMINAL_SHM_SIZE
+              value: {{ .Values.terminalShmSize | default "512Mi" | quote }}
             - name: TERMINAL_NODE_SELECTOR
               value: {{ .Values.terminalNodeSelector | toJson | quote }}
             - name: TERMINAL_TOLERATIONS

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import secrets
 import time
 from collections import defaultdict
@@ -33,6 +35,56 @@ bearer_scheme = HTTPBearer(auto_error=False)
 REQUESTS_PER_MINUTE = 300
 REQUEST_BODY_MAX_SIZE = 100 * 1024 * 1024
 request_counts: dict[str, list[float]] = defaultdict(list)
+
+# Browser capability URLs (/browser/view/{sid}/{token}/...) authenticate by the
+# path token instead of headers, so browsers can load them directly. Browsers
+# also cannot send X-User-Id, so the proxy keeps a sid -> pod affinity map,
+# learned from /browser/sessions* responses, to route capability traffic.
+_BROWSER_VIEW_RE = re.compile(r"^browser/view/([^/]+)/([^/]+)(?:/(.+))?$")
+_BROWSER_SESSION_MAX = 1024
+_browser_sessions: dict[str, TerminalPod] = {}
+
+
+def _remember_browser_session(terminal: TerminalPod, *sids: Any) -> None:
+    """Track which pod owns each browser session id (bounded, insertion-oldest evicted)."""
+    for sid in sids:
+        if isinstance(sid, str) and sid:
+            _browser_sessions[sid] = terminal
+    while len(_browser_sessions) > _BROWSER_SESSION_MAX:
+        _browser_sessions.pop(next(iter(_browser_sessions)))
+
+
+def _forget_browser_session(sid: str) -> None:
+    _browser_sessions.pop(sid, None)
+
+
+def _learn_browser_sessions(path: str, method: str, terminal: TerminalPod, response: Response) -> None:
+    """Learn sid -> pod affinity from successful /browser/sessions* responses."""
+    if not (path == "browser/sessions" or path.startswith("browser/sessions/")):
+        return
+    if response.status_code >= 300:
+        return
+    try:
+        data = json.loads(response.body)
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    if path == "browser/sessions":
+        if method == "GET":
+            _remember_browser_session(
+                terminal,
+                data.get("current_session_id"),
+                *[s.get("id") for s in data.get("sessions", []) if isinstance(s, dict)],
+            )
+        elif method == "POST" and data.get("id"):
+            _remember_browser_session(terminal, data["id"])
+        return
+    sid = path.removeprefix("browser/sessions/")
+    if method == "DELETE":
+        _forget_browser_session(sid)
+    else:
+        _remember_browser_session(terminal, sid)
 
 
 class WriteFileRequest(BaseModel):
@@ -101,6 +153,35 @@ async def verify_api_key(
     if not credentials or credentials.credentials != PROXY_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return credentials.credentials
+
+
+async def require_api_key(request: Request) -> None:
+    """verify_api_key for routes that cannot declare it as a Depends (conditional auth)."""
+    credentials = await bearer_scheme(request)
+    await verify_api_key(credentials)
+
+
+async def _authenticate_ws_client(client_ws: WebSocket) -> dict[str, Any] | None:
+    """Expect the proxy API key as the first ``{type: auth}`` message.
+
+    Returns the client's auth payload (extra keys such as chat_id are relayed
+    upstream) or None once the socket has been closed on failure.
+    """
+    if not PROXY_API_KEY:
+        return {}
+    try:
+        raw = await asyncio.wait_for(client_ws.receive_text(), timeout=10.0)
+        payload: Any = json.loads(raw)
+        if not isinstance(payload, dict) or payload.get("type") != "auth" or payload.get("token") != PROXY_API_KEY:
+            await client_ws.close(code=1008, reason="Policy Violation: Invalid API key")
+            return None
+        auth_payload: dict[str, Any] = payload
+        return auth_payload
+    except Exception:
+        await client_ws.close(
+            code=1008, reason="Policy Violation: Auth timeout or invalid payload"
+        )
+        return None
 
 
 def extract_user_id(request: Request) -> str:
@@ -251,15 +332,19 @@ async def rate_limit_middleware(
 
     request_counts[client_ip] = [ts for ts in request_counts[client_ip] if now - ts < 60]
 
-    if len(request_counts[client_ip]) >= REQUESTS_PER_MINUTE:
-        latency = time.time() - now
-        record_request(request.method, request.url.path, latency, 429)
-        return JSONResponse(
-            status_code=429,
-            content={"error": "Rate limit exceeded", "detail": "Too many requests"},
-        )
+    # Browser capability pages (frame proxy, runtime.js) are fetched by the
+    # browser itself and can burst well past this limit during ordinary page
+    # loads; they are authenticated by their path token, not the API key.
+    if not request.url.path.startswith("/browser/view/"):
+        if len(request_counts[client_ip]) >= REQUESTS_PER_MINUTE:
+            latency = time.time() - now
+            record_request(request.method, request.url.path, latency, 429)
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Rate limit exceeded", "detail": "Too many requests"},
+            )
 
-    request_counts[client_ip].append(now)
+        request_counts[client_ip].append(now)
 
     start_time = time.time()
     response = await call_next(request)
@@ -349,20 +434,60 @@ async def metrics() -> Response:
     return Response(content=metrics_text, media_type="text/plain; charset=utf-8")
 
 
+async def _pod_features(terminal: TerminalPod) -> dict[str, Any] | None:
+    """Fetch the terminal pod's own feature flags; None if unreachable."""
+    try:
+        client = await http_proxy.get_client()
+        response = await client.get(
+            f"{terminal.endpoint}/api/config",
+            headers={"Authorization": f"Bearer {terminal.api_key}"},
+        )
+        response.raise_for_status()
+        data: Any = response.json()
+        if isinstance(data, dict) and isinstance(data.get("features"), dict):
+            features: dict[str, Any] = data["features"]
+            return features
+        return None
+    except Exception as e:
+        logger.warning(f"Terminal pod /api/config unreachable ({e}); using fallback flags")
+        return None
+
+
 @app.get(
     "/api/config",
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
 )
-async def get_config() -> dict[str, dict[str, bool]]:
-    """Get proxy configuration."""
-    return {
-        "features": {
-            "terminal": True,
-            "notebooks": True,
-            "desktop": False,
-        },
-    }
+async def get_config(request: Request) -> JSONResponse:
+    """Capability discovery: forward the terminal pod's own /api/config so the
+    UI only shows what the pod can actually serve (desktop = ENABLE_DESKTOP and
+    desktop_available(), browser = ENABLE_BROWSER, git = which(git), events = true).
+    Falls back to configured flags when no pod can be reached; git stays hidden
+    there because the proxy cannot know whether the pod image ships git."""
+    config: dict[str, Any] = {}
+    user_id = request.headers.get("X-User-Id")
+    if user_id:
+        try:
+            terminal = await get_terminal_for_user(
+                user_id, extract_chat_id(request), bump_activity=False
+            )
+            features = await _pod_features(terminal)
+            if features is not None:
+                config = {"features": features}
+        except (HTTPException, K8sUnavailableError) as e:
+            logger.warning(f"No terminal for /api/config ({e}); using fallback flags")
+    if not config:
+        config = {
+            "features": {
+                "terminal": settings.terminal_enable_terminal is not False,
+                "notebooks": settings.terminal_enable_notebooks is not False,
+                "desktop": settings.terminal_enable_desktop is not False,
+                "browser": settings.terminal_enable_browser is not False,
+                "git": False,
+                "events": True,
+            },
+        }
+    return JSONResponse(content=config)
 
 
 @app.get(
@@ -777,24 +902,13 @@ async def proxy_terminal_session(
 @app.websocket("/api/terminals/{session_id}")
 async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
     """WebSocket endpoint for terminal sessions."""
-    import json
-
     await client_ws.accept()
 
-    if PROXY_API_KEY:
-        try:
-            raw = await asyncio.wait_for(client_ws.receive_text(), timeout=10.0)
-            payload = json.loads(raw)
-            if payload.get("type") != "auth" or payload.get("token") != PROXY_API_KEY:
-                await client_ws.close(code=1008, reason="Policy Violation: Invalid API key")
-                return
-        except (TimeoutError, json.JSONDecodeError, Exception):
-            await client_ws.close(
-                code=1008, reason="Policy Violation: Auth timeout or invalid payload"
-            )
-            return
+    auth = await _authenticate_ws_client(client_ws)
+    if auth is None:
+        return
 
-    user_id = client_ws.query_params.get("user_id")
+    user_id = client_ws.query_params.get("user_id") or auth.get("user_id")
     if not user_id:
         await client_ws.close(code=1008, reason="Policy Violation: user_id query param required")
         return
@@ -814,6 +928,7 @@ async def websocket_terminal(client_ws: WebSocket, session_id: str) -> None:
             client_ws=client_ws,
             terminal=terminal,
             path=f"/api/terminals/{session_id}",
+            auth_payload=auth,
         )
     finally:
         pod_manager.release(terminal)
@@ -1056,24 +1171,13 @@ async def proxy_desktop_scroll(
 @app.websocket("/desktop/vnc")
 async def websocket_desktop_vnc(client_ws: WebSocket) -> None:
     """WebSocket endpoint for noVNC (websockify) proxy to the virtual desktop."""
-    import json
-
     await client_ws.accept()
 
-    if PROXY_API_KEY:
-        try:
-            raw = await asyncio.wait_for(client_ws.receive_text(), timeout=10.0)
-            payload = json.loads(raw)
-            if payload.get("type") != "auth" or payload.get("token") != PROXY_API_KEY:
-                await client_ws.close(code=1008, reason="Policy Violation: Invalid API key")
-                return
-        except (TimeoutError, json.JSONDecodeError, Exception):
-            await client_ws.close(
-                code=1008, reason="Policy Violation: Auth timeout or invalid payload"
-            )
-            return
+    auth = await _authenticate_ws_client(client_ws)
+    if auth is None:
+        return
 
-    user_id = client_ws.query_params.get("user_id")
+    user_id = client_ws.query_params.get("user_id") or auth.get("user_id")
     if not user_id:
         await client_ws.close(code=1008, reason="Policy Violation: user_id query param required")
         return
@@ -1087,11 +1191,113 @@ async def websocket_desktop_vnc(client_ws: WebSocket) -> None:
         await client_ws.close(code=1011, reason=f"Internal Error: {e.detail}")
         return
 
-    await ws_proxy.proxy_websocket(
-        client_ws=client_ws,
-        terminal=terminal,
-        path="/desktop/vnc",
+    pod_manager.acquire(terminal)
+    try:
+        await ws_proxy.proxy_websocket(
+            client_ws=client_ws,
+            terminal=terminal,
+            path="/desktop/vnc",
+            auth_payload=auth,
+        )
+    finally:
+        pod_manager.release(terminal)
+
+
+@app.api_route("/{path:path}", methods=PROXY_METHODS, include_in_schema=False)
+async def proxy_catch_all(path: str, request: Request) -> Response:
+    """Forward any endpoint without an explicit route to the terminal pod, so
+    new upstream endpoints work without a proxy release. Registered AFTER all
+    explicit routes (Starlette matches in registration order), so it never
+    shadows them.
+
+    Browser capability URLs (/browser/view/{sid}/{token}/...) authenticate by
+    the path token instead of the proxy API key: browsers load them without an
+    Authorization header, and the token must never be logged.
+    """
+    match = _BROWSER_VIEW_RE.fullmatch(path)
+    if match:
+        sid, token, rest = match.group(1), match.group(2), match.group(3) or ""
+        terminal = _browser_sessions.get(sid)
+        if terminal is None:
+            raise HTTPException(status_code=404, detail="Browser session unknown or expired")
+        target_url = f"{terminal.endpoint}/browser/view/{sid}/{token}"
+        if rest:
+            target_url += f"/{rest}"
+        return await http_proxy.proxy_request(
+            target_url, request, terminal.api_key, pod_key=terminal.user_hash
+        )
+
+    await require_api_key(request)
+    user_id = extract_user_id(request)
+    terminal = await get_terminal_for_user(user_id, extract_chat_id(request))
+
+    # query params ride on the request: http_proxy forwards request.query_params.
+    target_url = f"{terminal.endpoint}/{path}"
+    response = await http_proxy.proxy_request(
+        target_url, request, terminal.api_key, pod_key=terminal.user_hash
     )
+    _learn_browser_sessions(path, request.method, terminal, response)
+    return response
+
+
+@app.websocket("/{path:path}")
+async def websocket_catch_all(client_ws: WebSocket, path: str) -> None:
+    """Forward any WebSocket without an explicit route to the terminal pod.
+
+    Capability URLs skip the auth handshake (upstream authenticates by the path
+    token); every other socket uses the {type: auth} message flow and requires
+    the user id, like /api/terminals/{session_id}. All sockets register with the
+    pod manager so the pod is not evicted mid-session.
+    """
+    await client_ws.accept()
+
+    match = _BROWSER_VIEW_RE.fullmatch(path)
+    if match:
+        sid, token, rest = match.group(1), match.group(2), match.group(3) or ""
+        terminal = _browser_sessions.get(sid)
+        if terminal is None:
+            await client_ws.close(code=4004, reason="Browser session expired")
+            return
+        pod_manager.acquire(terminal)
+        try:
+            await ws_proxy.proxy_websocket(
+                client_ws=client_ws,
+                terminal=terminal,
+                path=f"/browser/view/{sid}/{token}/{rest}",
+                send_auth=False,
+            )
+        finally:
+            pod_manager.release(terminal)
+        return
+
+    auth = await _authenticate_ws_client(client_ws)
+    if auth is None:
+        return
+
+    user_id = client_ws.query_params.get("user_id") or auth.get("user_id")
+    if not user_id:
+        await client_ws.close(code=1008, reason="Policy Violation: user_id query param required")
+        return
+
+    try:
+        terminal = await get_terminal_for_user(user_id, client_ws.headers.get("x-session-id"))
+    except K8sUnavailableError as e:
+        await client_ws.close(code=1011, reason=f"Internal Error: {e}")
+        return
+    except HTTPException as e:
+        await client_ws.close(code=1011, reason=f"Internal Error: {e.detail}")
+        return
+
+    pod_manager.acquire(terminal)
+    try:
+        await ws_proxy.proxy_websocket(
+            client_ws=client_ws,
+            terminal=terminal,
+            path=f"/{path}",
+            auth_payload=auth,
+        )
+    finally:
+        pod_manager.release(terminal)
 
 
 def main() -> None:
