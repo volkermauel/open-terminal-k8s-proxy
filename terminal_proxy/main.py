@@ -467,15 +467,13 @@ async def get_config(request: Request) -> JSONResponse:
     config: dict[str, Any] = {}
     user_id = request.headers.get("X-User-Id")
     if user_id:
-        try:
-            terminal = await get_terminal_for_user(
-                user_id, extract_chat_id(request), bump_activity=False
-            )
+        # Lookup-only: capability polling must never create a pod or bootstrap
+        # a chat dir; without a running pod the configured flags apply.
+        terminal = await pod_manager.lookup(user_id, extract_chat_id(request))
+        if terminal is not None:
             features = await _pod_features(terminal)
             if features is not None:
                 config = {"features": features}
-        except (HTTPException, K8sUnavailableError) as e:
-            logger.warning(f"No terminal for /api/config ({e}); using fallback flags")
     if not config:
         config = {
             "features": {

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
 from terminal_proxy.circuit_breaker import circuit_breaker_registry
+from terminal_proxy.paths import is_capability_path
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +72,11 @@ class HttpProxy:
             k: v for k, v in request.headers.items()
             if k.lower() not in STRIPPED_REQUEST_HEADERS
         }
-        headers["Authorization"] = f"Bearer {terminal_api_key}"
+        # Capability URLs (/browser/view/{sid}/{token}/...) authenticate by the
+        # path token upstream; injecting our key would make the token optional
+        # for anyone who knows the sid.
+        if not is_capability_path(urlsplit(target_url).path):
+            headers["Authorization"] = f"Bearer {terminal_api_key}"
 
         body = await request.body()
 

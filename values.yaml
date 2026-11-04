@@ -5,14 +5,17 @@ image:
   pullPolicy: Always
   tag: main
 
-# Terminal image: MUST be pinned to a version tag (never "latest") so
-# imagePullPolicy IfNotPresent is safe. Must be a desktop-capable (default)
-# image -- the slim/alpine/openshift variants lack tigervnc, xfce4, pulseaudio
-# and chromium, so Desktop and Browser cannot work on them.
+# Terminal image: MUST be our desktop-capable build of the upstream DEFAULT
+# variant (this is what Desktop/Browser need: tigervnc, xfce4, pulseaudio,
+# chromium). The slim/alpine/openshift variants cannot serve them.
+# Must be pinned to a version tag (never "latest") so imagePullPolicy
+# IfNotPresent is safe. Note: our tags carry no "v" prefix.
 terminalImage:
-  repository: ghcr.io/open-webui/open-terminal
+  repository: ghcr.io/volkermauel/open-terminal
   pullPolicy: IfNotPresent
-  tag: v0.16.1
+  tag: 0.16.1-desktop
+  # Optional digest pin; when set, the image reference becomes repo:tag@digest.
+  digest: ""
 
 # Capability flags passed to terminal pods as OPEN_TERMINAL_ENABLE_*.
 # null leaves the terminal image's default (all true on v0.16.x).

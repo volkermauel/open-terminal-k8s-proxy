@@ -147,11 +147,12 @@ def test_dev_shm_tmpfs_mounted_with_size_limit() -> None:
     assert {"name": "dev-shm", "mountPath": "/dev/shm"} in c["volumeMounts"]
 
 
-def test_dev_shm_without_explicit_size_limit() -> None:
-    cfg = _cfg(terminal_shm_size="")
-    pod, *_ = build_pod_for_user(TerminalPod.create("u", "k"), cfg)
+def test_dev_shm_default_size_limit_is_512mi() -> None:
+    """Empty/0 shm sizes are rejected at config validation (unbounded tmpfs),
+    so the manifest always carries a sizeLimit -- 512Mi by default."""
+    pod, *_ = build_pod_for_user(TerminalPod.create("u", "k"), _cfg())
     volume = next(v for v in pod["spec"]["volumes"] if v["name"] == "dev-shm")
-    assert volume["emptyDir"] == {"medium": "Memory"}
+    assert volume["emptyDir"] == {"medium": "Memory", "sizeLimit": "512Mi"}
 
 
 def test_shm_volume_does_not_activate_data_volume_cwd() -> None:

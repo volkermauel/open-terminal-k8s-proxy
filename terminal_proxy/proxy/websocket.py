@@ -6,18 +6,16 @@ import asyncio
 import contextlib
 import json
 import logging
-import re
 from typing import Any
 
 import aiohttp
 from fastapi import WebSocket, WebSocketDisconnect
 
+from terminal_proxy.config import settings
 from terminal_proxy.models import TerminalPod
+from terminal_proxy.paths import mask_capability_token
 
 logger = logging.getLogger(__name__)
-
-# Capability URLs embed a per-session token; keep it out of logs.
-_TOKEN_IN_PATH_RE = re.compile(r"(browser/view/[^/]+)/[^/]+(/?)")
 
 RELAY_WEBSOCKET_TYPES = (
     aiohttp.WSMsgType.CLOSE,
@@ -25,11 +23,6 @@ RELAY_WEBSOCKET_TYPES = (
     aiohttp.WSMsgType.CLOSED,
     aiohttp.WSMsgType.ERROR,
 )
-
-
-def safe_ws_path(path: str) -> str:
-    """Mask browser capability tokens so they never reach logs."""
-    return _TOKEN_IN_PATH_RE.sub(r"\1/***/", path)
 
 
 class WebSocketProxy:
@@ -69,8 +62,9 @@ class WebSocketProxy:
         """
         session = await self.get_session()
 
-        ws_url = f"ws://{terminal.service_name}:8000{path}"
-        log_url = f"ws://{terminal.service_name}:8000{safe_ws_path(path)}"
+        port = settings.terminal_service_port
+        ws_url = f"ws://{terminal.service_name}:{port}{path}"
+        log_url = f"ws://{terminal.service_name}:{port}{mask_capability_token(path)}"
         logger.info(f"Connecting to upstream WebSocket: {log_url}")
 
         connect_kwargs: dict[str, Any] = {}

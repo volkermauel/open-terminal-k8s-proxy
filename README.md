@@ -44,8 +44,9 @@ helm install open-terminal-k8s-proxy ./open-terminal-k8s-proxy \
 | `secret.create`                                    | `true`                             | Create Secret with `secret.data` values                         |
 | `secret.existingSecret`                            | `""`                               | Reference to external Secret (disables `create`)                |
 | `secret.data.PROXY_API_KEY`                        | `""`                               | API key for Open WebUI → Proxy                                  |
-| `terminalImage.repository`                         | `ghcr.io/open-webui/open-terminal` | Terminal container image                                        |
-| `terminalImage.tag`                                | `v0.16.1`                          | Terminal image tag (must be pinned; never `latest`)             |
+| `terminalImage.repository`                         | `ghcr.io/volkermauel/open-terminal` | Terminal container image (desktop-capable build; upstream default variant) |
+| `terminalImage.tag`                                | `0.16.1-desktop`                       | Terminal image tag (must be pinned; never `latest`; no `v` prefix) |
+| `terminalImage.digest`                             | `""`                               | Optional digest pin; image ref becomes `repo:tag@digest` when set |
 | `terminalCapabilities.desktop`                     | `true`                             | `OPEN_TERMINAL_ENABLE_DESKTOP` (needs default desktop-capable image) |
 | `terminalCapabilities.browser`                     | `true`                             | `OPEN_TERMINAL_ENABLE_BROWSER` (needs chromium)                 |
 | `terminalCapabilities.terminal`                    | `null`                             | `OPEN_TERMINAL_ENABLE_TERMINAL` (`null` = image default)        |

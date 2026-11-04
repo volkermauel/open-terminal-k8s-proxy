@@ -37,7 +37,11 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: TERMINAL_IMAGE
-              value: "{{ .Values.terminalImage.repository }}:{{ .Values.terminalImage.tag }}"
+              {{- $terminalImage := printf "%s:%s" .Values.terminalImage.repository .Values.terminalImage.tag }}
+              {{- with .Values.terminalImage.digest }}
+              {{- $terminalImage = printf "%s@%s" $terminalImage . }}
+              {{- end }}
+              value: {{ $terminalImage | quote }}
             - name: TERMINAL_IMAGE_PULL_POLICY
               value: {{ .Values.terminalImage.pullPolicy }}
             - name: TERMINAL_CPU_REQUEST

@@ -6,10 +6,8 @@ import time
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    pass
+from terminal_proxy.paths import mask_capability_token
 
 _request_counts: dict[str, list[float]] = defaultdict(list)
 _request_latencies: dict[str, list[float]] = defaultdict(list)
@@ -19,7 +17,8 @@ _active_pods_by_state: dict[str, int] = defaultdict(int)
 
 
 def record_request(method: str, path: str, latency_seconds: float, status_code: int) -> None:
-    key = f"{method}:{path}"
+    # Mask capability tokens so per-session secrets never land in /metrics.
+    key = f"{method}:{mask_capability_token(path)}"
     _request_latencies[key].append(latency_seconds)
     if len(_request_latencies[key]) > 1000:
         _request_latencies[key] = _request_latencies[key][-500:]

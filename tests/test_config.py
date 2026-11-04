@@ -3,6 +3,9 @@
 import os
 from unittest.mock import patch
 
+import pytest
+from pydantic import ValidationError
+
 from terminal_proxy.config import Settings, StorageMode
 
 
@@ -19,6 +22,7 @@ def test_settings_defaults():
     assert settings.pod_idle_timeout_seconds == 3600
     assert settings.terminal_ephemeral_storage_request == "5Gi"
     assert settings.terminal_ephemeral_storage_limit == "5Gi"
+    assert settings.terminal_shm_size == "512Mi"
 
 
 def test_settings_from_env():
@@ -45,6 +49,19 @@ def test_cors_origins_parsing():
     with patch.dict(os.environ, {"CORS_ALLOWED_ORIGINS": "http://localhost,http://example.com"}):
         settings = Settings()
         assert settings.cors_origins == ["http://localhost", "http://example.com"]
+
+
+@pytest.mark.parametrize("bad", ["", "0", "0Mi", "0.0Gi", "abc"])
+def test_shm_size_rejects_empty_and_zero(bad):
+    """Empty/0 would mount /dev/shm as an unbounded memory tmpfs."""
+    with pytest.raises(ValidationError, match="terminalShmSize"):
+        Settings(terminal_shm_size=bad)
+
+
+def test_shm_size_accepts_positive_quantities():
+    assert Settings(terminal_shm_size="1Gi").terminal_shm_size == "1Gi"
+    assert Settings(terminal_shm_size="0.5Gi").terminal_shm_size == "0.5Gi"
+    assert Settings(terminal_shm_size="256Mi").terminal_shm_size == "256Mi"
 
 
 def test_settings_none_mode():

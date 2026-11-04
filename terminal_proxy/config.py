@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -100,7 +101,8 @@ class Settings(BaseSettings):
     terminal_shm_size: str = Field(
         default="512Mi",
         description="Size limit for the terminal pod's memory-backed /dev/shm "
-        "(required by chromium). Empty string mounts tmpfs without a limit.",
+        "(required by chromium). Must be a positive quantity: empty or 0 would "
+        "mount an unbounded memory tmpfs and is rejected.",
     )
 
     terminal_node_selector: dict[str, str] = Field(
@@ -198,6 +200,18 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """Parse CORS allowed origins into a list."""
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+
+    @field_validator("terminal_shm_size")
+    @classmethod
+    def _validate_shm_size(cls, value: str) -> str:
+        """Reject empty/0: they mount /dev/shm as an unbounded memory tmpfs."""
+        quantity = re.fullmatch(r"(\d+(?:\.\d+)?(?:[eE]\d+)?)\s*[KMGTPEk]?i?", value.strip())
+        if quantity is None or float(quantity.group(1)) <= 0:
+            raise ValueError(
+                f"terminalShmSize must be a positive Kubernetes quantity (e.g. 512Mi); "
+                f"empty or 0 would mount /dev/shm unbounded: got {value!r}"
+            )
+        return value.strip()
 
     @model_validator(mode="after")
     def _validate_pod_mode_storage(self) -> Settings:

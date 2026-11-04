@@ -441,7 +441,7 @@ def test_api_config_forwards_pod_features(client):
 
     with (
         patch(
-            "terminal_proxy.main.get_terminal_for_user",
+            "terminal_proxy.main.pod_manager.lookup",
             new=AsyncMock(return_value=terminal),
         ),
         patch(
@@ -467,17 +467,23 @@ def test_api_config_falls_back_to_configured_flags_when_pod_unreachable(
 ):
     from unittest.mock import AsyncMock, patch
 
-    from fastapi import HTTPException
-
     from terminal_proxy import config as config_module
 
     monkeypatch.setattr(config_module.settings, "terminal_enable_desktop", False)
     monkeypatch.setattr(config_module.settings, "terminal_enable_browser", True)
 
-    async def unavailable(*_a: object, **_k: object) -> None:
-        raise HTTPException(status_code=503, detail="Terminal not ready")
+    http_client = _Stub(get=AsyncMock(side_effect=RuntimeError("pod down")))
 
-    with patch("terminal_proxy.main.get_terminal_for_user", new=AsyncMock(side_effect=unavailable)):
+    with (
+        patch(
+            "terminal_proxy.main.pod_manager.lookup",
+            new=AsyncMock(return_value=_terminal_stub()),
+        ),
+        patch(
+            "terminal_proxy.main.http_proxy.get_client",
+            new=AsyncMock(return_value=http_client),
+        ),
+    ):
         response = client.get("/api/config", headers=_config_headers())
 
     assert response.status_code == 200
@@ -487,6 +493,38 @@ def test_api_config_falls_back_to_configured_flags_when_pod_unreachable(
     # git is unknowable without a pod: never advertise it in the fallback
     assert features["git"] is False
     assert features["events"] is True
+
+
+def test_api_config_does_not_create_pod_in_per_user_mode(client, monkeypatch):
+    """Capability polling (/api/config) must be lookup-only in perUser mode:
+    it must never get-or-create a pod nor bootstrap a chat dir."""
+    from unittest.mock import AsyncMock, patch
+
+    from terminal_proxy import config as config_module
+    from terminal_proxy.config import PodMode
+
+    monkeypatch.setattr(config_module.settings, "pod_mode", PodMode.PER_USER)
+
+    with (
+        patch(
+            "terminal_proxy.main.pod_manager.lookup",
+            new=AsyncMock(return_value=None),
+        ) as lookup,
+        patch(
+            "terminal_proxy.main.pod_manager.get_or_create", new=AsyncMock()
+        ) as get_or_create,
+        patch("terminal_proxy.main.ensure_chat_dir", new=AsyncMock()) as bootstrap,
+    ):
+        response = client.get("/api/config", headers=_config_headers())
+
+    assert response.status_code == 200
+    lookup.assert_awaited_once()
+    get_or_create.assert_not_awaited()
+    bootstrap.assert_not_awaited()
+    # no running pod: the configured fallback flags apply
+    features = response.json()["features"]
+    assert features["terminal"] is True
+    assert features["git"] is False
 
 
 def test_api_config_without_user_id_uses_fallback(client):
