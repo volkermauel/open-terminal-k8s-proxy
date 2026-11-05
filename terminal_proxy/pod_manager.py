@@ -29,7 +29,7 @@ def _pod_image(pod: object) -> str | None:
         return None
 
 
-def _image_is_stale(terminal: "TerminalPod", configured: str) -> bool:
+def _image_is_stale(terminal: TerminalPod, configured: str) -> bool:
     """True when the running pod was created from a different image.
 
     Pods are reused while RUNNING, so without this a proxy redeploy that changes
