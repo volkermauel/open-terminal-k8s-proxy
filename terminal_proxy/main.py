@@ -462,8 +462,9 @@ async def get_config(request: Request) -> JSONResponse:
     """Capability discovery: forward the terminal pod's own /api/config so the
     UI only shows what the pod can actually serve (desktop = ENABLE_DESKTOP and
     desktop_available(), browser = ENABLE_BROWSER, git = which(git), events = true).
-    Falls back to configured flags when no pod can be reached; git stays hidden
-    there because the proxy cannot know whether the pod image ships git."""
+    Falls back to configured flags when no pod can be reached (git and events are
+    not probeable then: they describe the configured image, see
+    TERMINAL_CAPABILITY_GIT / TERMINAL_CAPABILITY_EVENTS)."""
     config: dict[str, Any] = {}
     user_id = request.headers.get("X-User-Id")
     if user_id:
@@ -481,8 +482,8 @@ async def get_config(request: Request) -> JSONResponse:
                 "notebooks": settings.terminal_enable_notebooks is not False,
                 "desktop": settings.terminal_enable_desktop is not False,
                 "browser": settings.terminal_enable_browser is not False,
-                "git": False,
-                "events": True,
+                "git": settings.terminal_capability_git,
+                "events": settings.terminal_capability_events,
             },
         }
     return JSONResponse(content=config)

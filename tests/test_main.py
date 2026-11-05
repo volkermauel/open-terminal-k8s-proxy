@@ -490,9 +490,25 @@ def test_api_config_falls_back_to_configured_flags_when_pod_unreachable(
     features = response.json()["features"]
     assert features["desktop"] is False
     assert features["browser"] is True
-    # git is unknowable without a pod: never advertise it in the fallback
-    assert features["git"] is False
+    # git/events describe the configured image when no pod is reachable
+    assert features["git"] is True
     assert features["events"] is True
+
+
+def test_api_config_fallback_honours_capability_knobs(client, monkeypatch):
+    """Images without git (or with events disabled) must be describable: the
+    fallback takes the capability from settings instead of hardcoding it."""
+    from terminal_proxy import config as config_module
+
+    monkeypatch.setattr(config_module.settings, "terminal_capability_git", False)
+    monkeypatch.setattr(config_module.settings, "terminal_capability_events", False)
+
+    response = client.get("/api/config", headers=_config_headers())
+
+    assert response.status_code == 200
+    features = response.json()["features"]
+    assert features["git"] is False
+    assert features["events"] is False
 
 
 def test_api_config_does_not_create_pod_in_per_user_mode(client, monkeypatch):
@@ -524,7 +540,7 @@ def test_api_config_does_not_create_pod_in_per_user_mode(client, monkeypatch):
     # no running pod: the configured fallback flags apply
     features = response.json()["features"]
     assert features["terminal"] is True
-    assert features["git"] is False
+    assert features["git"] is True
 
 
 def test_api_config_without_user_id_uses_fallback(client):

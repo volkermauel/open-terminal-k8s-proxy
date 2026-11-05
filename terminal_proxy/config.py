@@ -83,6 +83,21 @@ class Settings(BaseSettings):
         description="OPEN_TERMINAL_ENABLE_DESKTOP for terminal pods. "
         "Unset leaves the terminal image's default.",
     )
+    # Capabilities the proxy cannot probe without a pod. Upstream derives git
+    # from `which(git)` and always enables events, and the /api/config fallback
+    # (no pod yet: first page load, after an idle timeout) cannot know either.
+    # These describe the configured terminal image; our desktop image ships git.
+    terminal_capability_git: bool = Field(
+        default=True,
+        description="Report the git capability when no terminal pod is running "
+        "(TERMINAL_CAPABILITY_GIT). Set false for images without git.",
+    )
+    terminal_capability_events: bool = Field(
+        default=True,
+        description="Report the live-events capability when no terminal pod is "
+        "running (TERMINAL_CAPABILITY_EVENTS).",
+    )
+
     terminal_enable_browser: bool | None = Field(
         default=None,
         description="OPEN_TERMINAL_ENABLE_BROWSER for terminal pods. "

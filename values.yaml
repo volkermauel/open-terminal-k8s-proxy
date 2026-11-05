@@ -25,6 +25,10 @@ terminalCapabilities:
   browser: true
   terminal: null
   notebooks: null
+  # Only used when no terminal pod is running (first load / after an idle
+  # timeout): the proxy cannot probe these without a pod. Describe the image.
+  git: true
+  events: true
 
 # Memory-backed /dev/shm for terminal pods (chromium needs it; too small a
 # default tmpfs makes chrome tabs crash). Mounted as emptyDir medium: Memory.

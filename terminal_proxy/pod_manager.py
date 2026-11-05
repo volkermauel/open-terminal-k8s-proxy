@@ -19,6 +19,25 @@ from terminal_proxy.storage import storage_manager
 logger = logging.getLogger(__name__)
 
 
+
+def _pod_image(pod: object) -> str | None:
+    """Return the container image a pod was created with (first container)."""
+    try:
+        containers = getattr(getattr(pod, "spec", None), "containers", None) or []
+        return getattr(containers[0], "image", None) if containers else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _image_is_stale(terminal: "TerminalPod", configured: str) -> bool:
+    """True when the running pod was created from a different image.
+
+    Pods are reused while RUNNING, so without this a proxy redeploy that changes
+    TERMINAL_IMAGE would never reach existing users: the container keeps the old
+    image until its idle timeout. Comparing the recorded image forces a recycle.
+    """
+    return bool(terminal.image) and terminal.image != configured
+
 class PodManager:
     """Manages terminal pod lifecycle and tracking."""
 
@@ -88,6 +107,7 @@ class PodManager:
                         created_at=pod.metadata.creation_timestamp or datetime.utcnow(),
                         last_active_at=datetime.utcnow(),
                         pod_ip=pod.status.pod_ip,
+                        image=_pod_image(pod),
                     )
                     self._pods[pod_key] = terminal
                     logger.info(f"Reconciled existing pod {pod.metadata.name} for {pod_key}")
@@ -185,6 +205,11 @@ class PodManager:
         pod_key = self._pod_key(user_id, chat_id)
         terminal = self._pods.get(pod_key)
         if terminal and terminal.state == PodState.RUNNING:
+            # A pod still running the previous TERMINAL_IMAGE must not answer
+            # capability polling with the old image's flags; report "no pod" so
+            # the configured fallback applies, and let get_or_create recycle it.
+            if _image_is_stale(terminal, self.cfg.terminal_image):
+                return None
             return terminal
         return None
 
@@ -254,6 +279,20 @@ class PodManager:
         async with self._lock:
             terminal = self._pods.get(pod_key)
 
+            if terminal and terminal.state == PodState.RUNNING and _image_is_stale(
+                terminal, self.cfg.terminal_image
+            ):
+                logger.info(
+                    "Recycling pod %s: image changed (pod=%s configured=%s)",
+                    terminal.pod_name,
+                    terminal.image,
+                    self.cfg.terminal_image,
+                )
+                self._handle_pvc_on_remove(terminal)
+                k8s_client.delete_pod(terminal.pod_name)
+                del self._pods[pod_key]
+                terminal = None
+
             if terminal and terminal.state == PodState.RUNNING:
                 if bump_activity:
                     terminal.last_active_at = datetime.utcnow()
@@ -300,6 +339,8 @@ class PodManager:
             # Skip PVC creation
             if self.cfg.storage_mode == StorageMode.NONE:
                 terminal.pvc_name = None
+            # remember which image this pod is being created from (see _image_is_stale)
+            terminal.image = self.cfg.terminal_image
 
             await self._create_pod_resources(terminal)
 

@@ -65,6 +65,14 @@ spec:
             - name: TERMINAL_ENABLE_BROWSER
               value: {{ $caps.browser | quote }}
             {{- end }}
+            {{- if not (kindIs "invalid" $caps.git) }}
+            - name: TERMINAL_CAPABILITY_GIT
+              value: {{ $caps.git | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $caps.events) }}
+            - name: TERMINAL_CAPABILITY_EVENTS
+              value: {{ $caps.events | quote }}
+            {{- end }}
             {{- if not (kindIs "invalid" $caps.terminal) }}
             - name: TERMINAL_ENABLE_TERMINAL
               value: {{ $caps.terminal | quote }}

@@ -993,3 +993,55 @@ async def test_note_file_api_result_disabled_in_none_mode(pod_manager, mock_k8s_
 
     assert terminal.user_hash in pod_manager._pods
     mock_k8s_client.delete_pod.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lookup_hides_pod_running_a_stale_image(mock_k8s_client, mock_storage_manager):
+    """After TERMINAL_IMAGE changes, a still-running pod must not answer
+    capability polling with the previous image's flags."""
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+        terminal_image="registry/terminal:old",
+    )
+    pm = PodManager(cfg)
+    await pm.get_or_create("user-1", "chat-a")
+
+    pm.cfg.terminal_image = "registry/terminal:new"
+
+    assert await pm.lookup("user-1", "chat-a") is None
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_recycles_pod_when_the_image_changed(
+    mock_k8s_client, mock_storage_manager
+):
+    """A proxy redeploy that changes TERMINAL_IMAGE must reach running users:
+    the old pod is deleted and a new one created from the configured image."""
+    from terminal_proxy.config import PodMode
+
+    cfg = Settings(
+        proxy_api_key="k",
+        namespace="ns",
+        max_concurrent_pods=10,
+        storage_mode=StorageMode.SHARED,
+        pod_mode=PodMode.PER_CHAT,
+        terminal_image="registry/terminal:old",
+    )
+    pm = PodManager(cfg)
+    first = await pm.get_or_create("user-1", "chat-a")
+    assert first.image == "registry/terminal:old"
+    mock_k8s_client.reset_mock()
+
+    pm.cfg.terminal_image = "registry/terminal:new"
+    second = await pm.get_or_create("user-1", "chat-a")
+
+    mock_k8s_client.delete_pod.assert_called_once_with(first.pod_name)
+    mock_k8s_client.create_pod.assert_called_once()
+    # pod names are deterministic per (user, chat); the image proves recreation
+    assert second.image == "registry/terminal:new"

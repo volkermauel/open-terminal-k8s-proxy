@@ -86,6 +86,10 @@ class TerminalPod:
     # Consecutive data-mount/file-API failures (self-healing: recycled at
     # Settings.mount_failure_recycle_threshold). Reset by any success.
     file_api_failures: int = 0
+    # Container image the pod was created with. Compared against the configured
+    # TERMINAL_IMAGE so a proxy redeploy that changes the image actually reaches
+    # running pods (they are otherwise reused forever and silently stay stale).
+    image: str | None = None
 
     @property
     def endpoint(self) -> str:
