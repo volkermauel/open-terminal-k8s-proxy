@@ -38,7 +38,11 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
     "ruff>=0.1.0",
-    "mypy>=1.8.0",
+    # pinned: unpinned dev deps let CI drift into mypy/kubernetes-stub
+    # combinations that flag pre-existing kubernetes-client unions
+    # (V1ObjectMeta | None) and fail the build job.
+    "mypy==1.13.0",
+    "kubernetes==29.0.0",
     "types-aiofiles>=23.2.0",
 ]
 
